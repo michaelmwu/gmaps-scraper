@@ -455,6 +455,9 @@ class PlaceScraperTests(unittest.TestCase):
             )
         )
 
+    def test_extract_preview_address_rejects_service_option_lists(self) -> None:
+        self.assertIsNone(_extract_preview_address(["Dine-in, Takeout, Delivery"]))
+
     def test_extract_preview_address_keeps_addresses_with_prose_words(self) -> None:
         self.assertEqual(
             _extract_preview_address(

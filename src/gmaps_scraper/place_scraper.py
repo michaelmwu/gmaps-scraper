@@ -98,6 +98,18 @@ _ADDRESS_REJECT_SUBSTRINGS = (
     "street view",
     "termsprivacy",
 )
+_LOCALITY_ADDRESS_REJECT_VALUES = {
+    "delivery",
+    "dine-in",
+    "dine in",
+    "drive-through",
+    "drive through",
+    "kerbside pickup",
+    "no-contact delivery",
+    "outdoor seating",
+    "takeaway",
+    "takeout",
+}
 _ADDRESS_REJECT_HOST_FRAGMENTS = ("gstatic.com", "googleusercontent.com")
 _ADDRESS_ENTITY_TOKEN_PATTERN = re.compile(r"^/(?:g|m)/[A-Za-z0-9_-]+$")
 _URL_LIKE_PATTERN = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
@@ -909,6 +921,8 @@ def _looks_like_locality_address_line(line: str) -> bool:
         return False
     parts = [part.strip() for part in line.split(",") if part.strip()]
     if not 2 <= len(parts) <= 4:
+        return False
+    if all(part.casefold() in _LOCALITY_ADDRESS_REJECT_VALUES for part in parts):
         return False
     return all(any(character.isalpha() for character in part) and len(part) <= 60 for part in parts)
 
