@@ -31,6 +31,24 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn("root.querySelectorAll(selector)", _PLACE_JS_EXTRACTOR)
         self.assertIn(r"return /(^|\W)reviews?(\W|$)/i.test(label);", _PLACE_JS_EXTRACTOR)
 
+    def test_place_js_extractor_prefers_data_item_address_rows(self) -> None:
+        self.assertIn('const legacy = itemValue("address");', _PLACE_JS_EXTRACTOR)
+        self.assertIn("if (legacy) {", _PLACE_JS_EXTRACTOR)
+        self.assertIn('`[data-item-id="${itemId}"] .Io6YTe`', _PLACE_JS_EXTRACTOR)
+
+    def test_place_js_extractor_falls_back_to_address_icon_rows(self) -> None:
+        self.assertIn('const isAddressIcon = (icon) => {', _PLACE_JS_EXTRACTOR)
+        self.assertIn('glyph === ""', _PLACE_JS_EXTRACTOR)
+        self.assertIn('panel.querySelectorAll(".google-symbols, [role=', _PLACE_JS_EXTRACTOR)
+        self.assertIn('icon.closest(".LCF4w', _PLACE_JS_EXTRACTOR)
+        self.assertIn('const rowValue = (row) => {', _PLACE_JS_EXTRACTOR)
+
+    def test_place_js_extractor_reads_structured_info_rows(self) -> None:
+        self.assertIn("button[jsaction*='category']", _PLACE_JS_EXTRACTOR)
+        self.assertIn("button[data-item-id^='phone:'] .Io6YTe", _PLACE_JS_EXTRACTOR)
+        self.assertIn('plus_code: itemValue("oloc")', _PLACE_JS_EXTRACTOR)
+        self.assertIn("a[data-item-id='authority']", _PLACE_JS_EXTRACTOR)
+
     def test_parse_review_count_handles_suffixes(self) -> None:
         self.assertEqual(_parse_review_count("324"), 324)
         self.assertEqual(_parse_review_count("1,296"), 1296)
@@ -104,6 +122,37 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(details.lat, 0.0)
         self.assertEqual(details.lng, 0.0)
+
+    def test_build_place_details_rejects_fixaddress_url_addresses(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Nizami+Street",
+            resolved_url="https://www.google.com/maps/place/Nizami+Street",
+            snapshot={
+                "name": "Nizami Street",
+                "category": "Transportation",
+                "address": (
+                    "Address https://www.google.com/local/place/rap/fixaddress?"
+                    "g2lb=72971417,73155522,100805691&hl=en-CA&gl=ca"
+                ),
+                "body_text": "Nizami Street\nTransportation",
+            },
+        )
+
+        self.assertIsNone(details.address)
+
+    def test_build_place_details_accepts_locality_only_address(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Nizami+Street",
+            resolved_url="https://www.google.com/maps/place/Nizami+Street",
+            snapshot={
+                "name": "Nizami St",
+                "category": "Notable street",
+                "address": "Baku, Azerbaijan",
+                "body_text": "Nizami St\n4.7\n1,842 reviews\nNotable street",
+            },
+        )
+
+        self.assertEqual(details.address, "Baku, Azerbaijan")
 
     def test_extract_address_from_lines_supports_non_japanese_addresses(self) -> None:
         self.assertEqual(
@@ -377,6 +426,63 @@ class PlaceScraperTests(unittest.TestCase):
                 ]
             ),
             "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+        )
+
+    def test_extract_preview_address_rejects_review_snippets(self) -> None:
+        self.assertIsNone(
+            _extract_preview_address(
+                [
+                    (
+                        "The best takeout or eat in I recommend this place. We dropped in "
+                        "5 minutes "
+                        "before closing time and the owner took the initiative to cook us More"
+                    ),
+                    (
+                        "Fascinating 2 hours session introducing Tonga culture and history, "
+                        "way of life, using plants as herbal cues, medicine and food, "
+                        "traditional weapons and utensils, "
+                        "and more."
+                    ),
+                    (
+                        "The nuggets are massive, good size burgers and probably the best "
+                        "for value in town"
+                    ),
+                    (
+                        "This place has great food, good service, friendly owner, and "
+                        "delicious burgers"
+                    ),
+                ]
+            )
+        )
+
+    def test_extract_preview_address_keeps_addresses_with_prose_words(self) -> None:
+        self.assertEqual(
+            _extract_preview_address(
+                [
+                    "Good Burger, 1 Main St, New York, NY 10001",
+                    (
+                        "The nuggets are massive, good size burgers and probably the best "
+                        "for value in town"
+                    ),
+                ]
+            ),
+            "Good Burger, 1 Main St, New York, NY 10001",
+        )
+        self.assertEqual(
+            _extract_preview_address(["Session Road, Baguio, Benguet 2600, Philippines"]),
+            "Session Road, Baguio, Benguet 2600, Philippines",
+        )
+        self.assertEqual(
+            _extract_preview_address(["Best Avenue, Oakland, CA 94611"]),
+            "Best Avenue, Oakland, CA 94611",
+        )
+        self.assertEqual(
+            _extract_preview_address(["Dinner Plain, Victoria, Australia"]),
+            "Dinner Plain, Victoria, Australia",
+        )
+        self.assertEqual(
+            _extract_preview_address(["Port of Spain, Trinidad & Tobago"]),
+            "Port of Spain, Trinidad & Tobago",
         )
 
     def test_normalize_phone_candidate_accepts_long_unformatted_international_numbers(self) -> None:
