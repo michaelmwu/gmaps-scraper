@@ -85,7 +85,7 @@ _STRONG_ADDRESS_KEYWORD_PATTERN = re.compile(
 )
 _PROSE_TERM_PATTERN = re.compile(
     r"\b(?:best|good|great|delicious|dropped|experience|lunch|dinner|"
-    r"burger|burgers|nugget|nuggets|owner|recommend|session)\b",
+    r"burger|burgers|coffee|food|friendly|nugget|nuggets|owner|recommend|session)\b",
     re.IGNORECASE,
 )
 _ADDRESS_REJECT_SUBSTRINGS = (
@@ -117,6 +117,7 @@ _LOCALITY_ADDRESS_REJECT_VALUES = {
     "museum",
     "no-contact delivery",
     "outdoor seating",
+    "reservations",
     "restaurant",
     "shop",
     "shopping mall",
@@ -124,6 +125,7 @@ _LOCALITY_ADDRESS_REJECT_VALUES = {
     "takeaway",
     "takeout",
     "tourist attraction",
+    "wheelchair accessible entrance",
 }
 _ADDRESS_REJECT_HOST_FRAGMENTS = ("gstatic.com", "googleusercontent.com")
 _ADDRESS_ENTITY_TOKEN_PATTERN = re.compile(r"^/(?:g|m)/[A-Za-z0-9_-]+$")
@@ -944,7 +946,11 @@ def _looks_like_locality_address_line(line: str) -> bool:
         return False
     if not all(_locality_part_allows_period(part) for part in parts):
         return False
-    if all(_locality_address_reject_key(part) in _LOCALITY_ADDRESS_REJECT_VALUES for part in parts):
+    reject_count = sum(
+        _locality_address_reject_key(part) in _LOCALITY_ADDRESS_REJECT_VALUES
+        for part in parts
+    )
+    if reject_count >= 2:
         return False
     return all(any(character.isalpha() for character in part) and len(part) <= 60 for part in parts)
 
@@ -978,6 +984,8 @@ def _looks_like_review_snippet(line: str) -> bool:
         return True
     terms = _PROSE_TERM_PATTERN.findall(line)
     word_count = len(line.split())
+    if "," in line and len(terms) >= 2:
+        return True
     if word_count >= 10 and len(terms) >= 2:
         return True
     if word_count >= 10 and re.search(r"[.!?]", line) and terms:
