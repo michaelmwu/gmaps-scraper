@@ -255,6 +255,14 @@ url = build_maps_search_url("Analogue, Singapore")
 place = scrape_place(url)
 ```
 
+For ambiguous names, include the most specific caller-known context. Prefer a
+place ID when available, then full address, then city/country:
+
+```python
+build_maps_search_url("Analogue, Singapore", gl="sg")
+build_maps_search_url("Analogue, 30 Victoria Street, Singapore", gl="sg")
+```
+
 If the caller has a Google place ID, include it:
 
 ```python
@@ -270,6 +278,10 @@ localized UI surprises for the scraper and usually gives English-readable
 labels. Override `gl` when the downstream app has a regional bias such as `sg`,
 `tw`, `au`, or `uk`. Override `hl` only when you intentionally want Google Maps
 to render in another language and can tolerate more localized output.
+
+`gl` is a regional search bias, not proof of location. Downstream consumers that
+have expected city/country context should still validate the resolved place
+address or coordinates before accepting a refresh.
 
 ## Public API
 

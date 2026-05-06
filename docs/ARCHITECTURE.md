@@ -226,6 +226,11 @@ Maps pages reduce localized UI surprises and usually produce English-readable
 labels. Callers may override `gl` for regional bias. Callers may override `hl`,
 but non-English UI can increase selector and normalization drift.
 
+`gl` is a bias, not validation. A downstream consumer with expected guide region
+or city/country context should validate the resolved place after scraping. The
+scraper should not silently reject region mismatches because it does not know the
+product's intended geography.
+
 ## Batch Scraping And Session Reuse
 
 `scrape_places` reuses browser contexts within a sequential worker and supports

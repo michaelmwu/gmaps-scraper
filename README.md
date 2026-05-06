@@ -67,6 +67,18 @@ uv run gmaps-scraper \
   --output place-results.json
 ```
 
+Build a Maps search URL from downstream context:
+
+```python
+from gmaps_scraper import build_maps_search_url
+
+place_url = build_maps_search_url("Analogue, Singapore", gl="sg")
+```
+
+`gmaps-scraper` does not infer guide region. If your downstream app knows the
+place should be in Singapore, Taipei, Hanoi, or another region, put that context
+in the query or pass a Google place ID.
+
 Enable optional LLM repair only when deterministic extraction is thin or needs
 English-readable display normalization:
 
