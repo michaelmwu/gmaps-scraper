@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from gmaps_scraper.llm import (
     cached_place_repairer,
+    openai_compatible_place_repair,
     openai_compatible_place_repairer_from_env,
 )
 from gmaps_scraper.models import (
@@ -84,6 +85,34 @@ class LLMConfigTests(unittest.TestCase):
             {"address_display_en": "Tokyo, Japan", "_repair_source": "cache"},
         )
         self.assertEqual(len(calls), 1)
+
+    def test_cached_place_repairer_separates_llm_task_namespaces(self) -> None:
+        calls: list[PlaceLLMRepairRequest] = []
+
+        def repairer(request: PlaceLLMRepairRequest) -> dict[str, object]:
+            calls.append(request)
+            return {"address_display_en": "Tokyo, Japan"}
+
+        first_request = _build_request()
+        first_request.tasks = ["display_translation"]
+        first_request.diagnostics.evidence_hash = "evidence-fixture"
+        first_request.diagnostics.prompt_version = "prompt-fixture"
+        second_request = _build_request()
+        second_request.tasks = ["dom_repair"]
+        second_request.diagnostics.evidence_hash = "evidence-fixture"
+        second_request.diagnostics.prompt_version = "prompt-fixture"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cached = cached_place_repairer(
+                repairer,
+                cache_dir=Path(tmp_dir),
+                cache_namespace="gpt-test",
+            )
+
+            cached(first_request)
+            cached(second_request)
+
+        self.assertEqual(len(calls), 2)
 
     def test_cached_place_repairer_reuses_learned_translation_memory(self) -> None:
         calls: list[PlaceLLMRepairRequest] = []
@@ -199,6 +228,38 @@ class LLMConfigTests(unittest.TestCase):
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertNotIn("temperature", payload)
         messages = payload["messages"]
+        self.assertIsInstance(messages, list)
+        user_message = messages[1]
+        self.assertIsInstance(user_message, dict)
+        content = user_message["content"]
+        self.assertIsInstance(content, str)
+        self.assertEqual(
+            json.loads(content)["allowed_fields"],
+            list(PLACE_LLM_REPAIR_FIELDS),
+        )
+
+    def test_unknown_llm_task_falls_back_to_all_allowed_fields(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(http_request: object, timeout: float) -> _FakeHTTPResponse:
+            del timeout
+            captured["payload"] = json.loads(http_request.data.decode("utf-8"))
+            return _FakeHTTPResponse(
+                {"choices": [{"message": {"content": "{}"}}]}
+            )
+
+        request = _build_request()
+        request.tasks = ["future_task"]
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = openai_compatible_place_repair(
+                request,
+                api_key="test-openai-key",
+                base_url="https://api.openai.com/v1",
+                model="gpt-5-mini",
+            )
+
+        self.assertEqual(response, {})
+        messages = captured["payload"]["messages"]
         self.assertIsInstance(messages, list)
         user_message = messages[1]
         self.assertIsInstance(user_message, dict)
