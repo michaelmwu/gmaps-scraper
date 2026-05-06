@@ -213,6 +213,19 @@ consumer run the optional LLM repair path with a stable cache directory. This
 keeps the spend decision in the product while keeping Google Maps-specific
 translation memory and prompt behavior in `gmaps-scraper`.
 
+## Search URL Construction
+
+`gmaps-scraper` should not infer a caller's guide region. If a downstream guide
+knows that a place belongs to Singapore, Taipei, Hanoi, or another region, that
+context should be encoded in the Maps search URL before scraping. For example,
+the caller should pass a query like `Analogue, Singapore`, not just `Analogue`.
+
+The public `build_maps_search_url()` helper only formats a caller-provided query
+and optional `query_place_id`. It defaults to `hl=en` because English-rendered
+Maps pages reduce localized UI surprises and usually produce English-readable
+labels. Callers may override `gl` for regional bias. Callers may override `hl`,
+but non-English UI can increase selector and normalization drift.
+
 ## Batch Scraping And Session Reuse
 
 `scrape_places` reuses browser contexts within a sequential worker and supports

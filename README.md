@@ -88,6 +88,7 @@ from pathlib import Path
 
 from gmaps_scraper import (
     BrowserSessionConfig,
+    build_maps_search_url,
     cached_place_repairer,
     llm_cache_namespace_from_env,
     openai_compatible_place_repairer_from_env,
@@ -97,8 +98,9 @@ from gmaps_scraper import (
 
 saved_list = scrape_saved_list("https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18")
 
+place_url = build_maps_search_url("Analogue, Singapore")
 place = scrape_place(
-    "https://www.google.com/maps/place/Den/@35.6731762,139.7127216,17z",
+    place_url,
     browser_session=BrowserSessionConfig(
         profile_dir=Path(".gmaps-scraper/session"),
     ),

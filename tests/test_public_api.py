@@ -20,6 +20,7 @@ from gmaps_scraper import (
     ReviewTopic,
     SavedList,
     ScrapeError,
+    build_maps_search_url,
     cached_place_repairer,
     collect_place_snapshot,
     default_place_selector_recipe,
@@ -55,6 +56,7 @@ class PublicApiTests(unittest.TestCase):
         self.assertEqual(ReviewTopic.__name__, "ReviewTopic")
         self.assertTrue(issubclass(ParseError, RuntimeError))
         self.assertTrue(issubclass(ScrapeError, RuntimeError))
+        self.assertTrue(callable(build_maps_search_url))
         self.assertTrue(callable(collect_place_snapshot))
         self.assertTrue(callable(cached_place_repairer))
         self.assertTrue(callable(default_place_selector_recipe))

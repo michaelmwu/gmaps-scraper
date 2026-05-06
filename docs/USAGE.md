@@ -242,10 +242,40 @@ For mapping-based caches, use
 `reusable_place_display_fields(current_fields, previous_fields)` and merge the
 returned keys into the refreshed record.
 
+## Maps Search URL Helper
+
+`gmaps-scraper` does not know a downstream guide's region. The caller should
+build a specific query from its own context, then pass the resulting URL to the
+scraper.
+
+```python
+from gmaps_scraper import build_maps_search_url, scrape_place
+
+url = build_maps_search_url("Analogue, Singapore")
+place = scrape_place(url)
+```
+
+If the caller has a Google place ID, include it:
+
+```python
+url = build_maps_search_url(
+    "Ad Astra, Taipei",
+    place_id="ChIJHeQU2UCpQjQRhNcDeQ1fUMI",
+    gl="tw",
+)
+```
+
+The helper defaults to `hl="en"` and `gl="us"`. Keeping `hl=en` reduces
+localized UI surprises for the scraper and usually gives English-readable
+labels. Override `gl` when the downstream app has a regional bias such as `sg`,
+`tw`, `au`, or `uk`. Override `hl` only when you intentionally want Google Maps
+to render in another language and can tolerate more localized output.
+
 ## Public API
 
 Common top-level imports:
 
+- `build_maps_search_url`
 - `scrape_saved_list`
 - `scrape_place`
 - `scrape_places`

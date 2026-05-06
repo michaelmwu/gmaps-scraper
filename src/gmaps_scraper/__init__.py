@@ -45,6 +45,7 @@ from gmaps_scraper.selector_recipes import (
 from gmaps_scraper.translation_memory import needs_display_en
 from gmaps_scraper.url_tools import (
     PLACELIST_URL_MARKER,
+    build_maps_search_url,
     extract_list_id,
     extract_list_id_from_text,
     has_placelist_marker,
@@ -71,6 +72,7 @@ __all__ = [
     "SavedList",
     "ScrapeError",
     "cached_place_repairer",
+    "build_maps_search_url",
     "collect_place_snapshot",
     "default_place_selector_recipe",
     "extract_list_id",
