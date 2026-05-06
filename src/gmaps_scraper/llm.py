@@ -21,7 +21,6 @@ from gmaps_scraper.translation_memory import (
 )
 
 _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-_DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 _DEFAULT_CONFIG_PATH = Path("llm.json")
 _DEFAULT_LOCAL_CONFIG_PATH = Path("llm.local.json")
 _FALLBACK_LLM_SETTINGS: dict[str, object] = {
@@ -30,11 +29,6 @@ _FALLBACK_LLM_SETTINGS: dict[str, object] = {
             "api_key_env": "OPENAI_API_KEY",
             "base_url": _DEFAULT_OPENAI_BASE_URL,
             "base_url_env": "OPENAI_BASE_URL",
-        },
-        "anthropic": {
-            "api_key_env": "ANTHROPIC_API_KEY",
-            "base_url": _DEFAULT_ANTHROPIC_BASE_URL,
-            "base_url_env": "ANTHROPIC_OPENAI_BASE_URL",
         },
     },
     "models": {
@@ -50,14 +44,6 @@ _FALLBACK_LLM_SETTINGS: dict[str, object] = {
         "gpt-4.1-mini": {
             "provider": "openai",
             "model": "gpt-4.1-mini",
-        },
-        "haiku": {
-            "provider": "anthropic",
-            "model": "claude-3-5-haiku-latest",
-        },
-        "sonnet": {
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-20250514",
         },
     },
     "request_options": {

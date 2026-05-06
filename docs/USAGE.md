@@ -127,8 +127,10 @@ Configuration precedence is:
 2. Worktree-local `llm.local.json`
 3. Environment variables
 
-Built-in aliases currently include `gpt-5-mini`, `gpt-4o-mini`,
-`gpt-4.1-mini`, `haiku`, and `sonnet`.
+Built-in aliases currently include `gpt-5-mini`, `gpt-4o-mini`, and
+`gpt-4.1-mini`. Checked-in defaults intentionally target OpenAI-compatible chat
+completions endpoints only. Add other OpenAI-compatible providers through
+worktree-local `llm.local.json`.
 
 Example worktree-local `llm.local.json` for Fireworks:
 
