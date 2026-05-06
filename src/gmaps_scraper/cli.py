@@ -15,6 +15,7 @@ from gmaps_scraper.debug_dump import write_debug_dump, write_place_debug_dump
 from gmaps_scraper.llm import (
     LLMRepairError,
     cached_place_repairer,
+    llm_cache_namespace_from_env,
     openai_compatible_place_repairer_from_env,
 )
 from gmaps_scraper.models import PlaceDetails, PlaceLLMRepairRequest
@@ -40,6 +41,7 @@ from gmaps_scraper.scraper import (
     DEFAULT_COLLECTION_MODE,
     BrowserSessionConfig,
     HttpSessionConfig,
+    ScrapeError,
     _import_curl_requests,
     _raise_for_status,
     collect_saved_list_result,
@@ -236,10 +238,8 @@ def main() -> int:
                     env_file=args.llm_env_file,
                 )
                 if args.llm_cache_dir is not None:
-                    cache_namespace = (
-                        os.environ.get("LLM_MODEL")
-                        or os.environ.get("OPENAI_MODEL")
-                        or "default"
+                    cache_namespace = llm_cache_namespace_from_env(
+                        env_file=args.llm_env_file,
                     )
                     llm_fallback = cached_place_repairer(
                         llm_fallback,
@@ -568,6 +568,11 @@ def _scrape_place_for_debug(
     )
     raw_resolved_url = snapshot.get("resolved_url")
     resolved_url = raw_resolved_url if isinstance(raw_resolved_url, str) else None
+    if resolved_url is not None and extract_list_id(resolved_url) is not None:
+        raise ScrapeError(
+            "Place URL resolved to a Google Maps saved list. "
+            "Use `--kind list` for saved-list URLs or pass an individual place URL."
+        )
     dom_snapshot = cast(
         Mapping[str, object],
         snapshot["dom"] if isinstance(snapshot.get("dom"), dict) else {},

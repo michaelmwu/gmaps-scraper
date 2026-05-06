@@ -170,6 +170,40 @@ def cached_place_repairer(
     return repair
 
 
+def llm_cache_namespace_from_env(
+    *,
+    env_file: Path | None = None,
+    default_config_file: Path | None = None,
+    local_config_file: Path | None = None,
+) -> str:
+    """Return a stable cache namespace for the configured LLM model."""
+    _load_env_file(env_file or Path(".env"))
+    settings = _merge_config(
+        _FALLBACK_LLM_SETTINGS,
+        _load_json_config(default_config_file or _DEFAULT_CONFIG_PATH),
+    )
+    settings = _merge_config(
+        settings,
+        _load_json_config(local_config_file or _DEFAULT_LOCAL_CONFIG_PATH),
+    )
+    model_alias_or_id = os.environ.get("LLM_MODEL") or os.environ.get("OPENAI_MODEL")
+    if not model_alias_or_id:
+        return "default"
+    model_configs = settings.get("models")
+    model_config: Mapping[str, object] = {}
+    if isinstance(model_configs, Mapping):
+        raw_model_config = model_configs.get(model_alias_or_id)
+        if isinstance(raw_model_config, Mapping):
+            model_config = raw_model_config
+    provider_name = (
+        os.environ.get("LLM_PROVIDER")
+        or _string(model_config.get("provider"))
+        or "openai"
+    )
+    model = _string(model_config.get("model")) or model_alias_or_id
+    return f"{provider_name}:{model}"
+
+
 def _repair_from_translation_memory(
     request: PlaceLLMRepairRequest,
     learned_memory_path: Path,

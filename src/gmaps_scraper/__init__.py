@@ -7,6 +7,7 @@ from gmaps_scraper.display_fields import (
 from gmaps_scraper.llm import (
     LLMRepairError,
     cached_place_repairer,
+    llm_cache_namespace_from_env,
     openai_compatible_place_repairer_from_env,
 )
 from gmaps_scraper.models import (
@@ -76,6 +77,7 @@ __all__ = [
     "extract_list_id_from_text",
     "has_placelist_marker",
     "load_place_selector_recipe",
+    "llm_cache_namespace_from_env",
     "needs_display_en",
     "parse_saved_list_artifacts",
     "openai_compatible_place_repairer_from_env",

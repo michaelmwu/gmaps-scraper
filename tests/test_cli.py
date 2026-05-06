@@ -15,7 +15,12 @@ from gmaps_scraper.cli import (
     main,
 )
 from gmaps_scraper.models import PlaceDetails, PlaceScrapeResult
-from gmaps_scraper.scraper import BrowserArtifacts, BrowserSessionConfig, HttpSessionConfig
+from gmaps_scraper.scraper import (
+    BrowserArtifacts,
+    BrowserSessionConfig,
+    HttpSessionConfig,
+    ScrapeError,
+)
 
 
 def _artifacts() -> BrowserArtifacts:
@@ -559,6 +564,88 @@ class CliTests(unittest.TestCase):
             llm_fallback=llm_fallback,
             llm_policy="always",
         )
+
+    def test_place_kind_uses_env_file_model_for_llm_cache_namespace(self) -> None:
+        stdout = io.StringIO()
+        details = PlaceDetails(
+            source_url="https://www.google.com/maps/place/Den",
+            resolved_url="https://www.google.com/maps/place/Den",
+            name="Den",
+            category="Japanese restaurant",
+            rating=4.4,
+            review_count=324,
+            address="Tokyo, Japan",
+        )
+        llm_fallback = Mock()
+        cached_fallback = Mock()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            env_path = Path(tmp_dir) / ".env"
+            env_path.write_text(
+                "LLM_MODEL=gpt-5-mini\nOPENAI_API_KEY=test-key\n",
+                encoding="utf-8",
+            )
+            cache_dir = Path(tmp_dir) / "llm-cache"
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch(
+                    "sys.argv",
+                    [
+                        "gmaps-scraper",
+                        "https://www.google.com/maps/place/Den",
+                        "--kind",
+                        "place",
+                        "--llm-repair",
+                        "--llm-env-file",
+                        str(env_path),
+                        "--llm-cache-dir",
+                        str(cache_dir),
+                    ],
+                ),
+                patch(
+                    "gmaps_scraper.cli.openai_compatible_place_repairer_from_env",
+                    return_value=llm_fallback,
+                ),
+                patch(
+                    "gmaps_scraper.cli.cached_place_repairer",
+                    return_value=cached_fallback,
+                ) as cached_repairer,
+                patch("gmaps_scraper.cli.scrape_place", return_value=details) as scrape_place,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        cached_repairer.assert_called_once_with(
+            llm_fallback,
+            cache_dir=cache_dir,
+            cache_namespace="openai:gpt-5-mini",
+        )
+        scrape_place.assert_called_once()
+        self.assertIs(scrape_place.call_args.kwargs["llm_fallback"], cached_fallback)
+
+    def test_debug_place_scrape_rejects_saved_list_resolution(self) -> None:
+        snapshot = {
+            "resolved_url": (
+                "https://www.google.com/maps/@1,2,14z/"
+                "data=!4m3!11m2!2sShpCfVAkTaGQFUSz8UklcQ!3e3"
+            ),
+            "dom": {"name": "Singapore"},
+            "preview": {},
+        }
+
+        with patch("gmaps_scraper.cli.collect_place_snapshot", return_value=snapshot):
+            with self.assertRaisesRegex(ScrapeError, "saved list"):
+                _scrape_place_for_debug(
+                    "https://maps.app.goo.gl/example",
+                    headless=True,
+                    timeout_ms=30_000,
+                    settle_time_ms=3_000,
+                    browser_session=None,
+                    http_session=None,
+                    llm_fallback=None,
+                    llm_policy="on_quality_failure",
+                )
 
     def test_debug_place_scrape_uses_production_llm_quality_gate(self) -> None:
         llm_fallback = Mock(return_value={"fields": {"rating": 4.8}})

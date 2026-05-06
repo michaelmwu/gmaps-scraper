@@ -37,7 +37,7 @@ from gmaps_scraper.place_scraper import (
     _should_use_llm_repair,
     scrape_places,
 )
-from gmaps_scraper.scraper import BrowserSessionConfig, ScrapeError
+from gmaps_scraper.scraper import BrowserSessionConfig, HttpSessionConfig, ScrapeError
 
 
 class PlaceScraperTests(unittest.TestCase):
@@ -121,16 +121,20 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNotNone(results[0].place)
         self.assertFalse(results[0].place.limited_view)
 
-    def test_scrape_places_parallel_uses_worker_scoped_profile_dirs(self) -> None:
+    def test_scrape_places_parallel_uses_worker_scoped_session_paths(self) -> None:
         seen_profile_dirs: list[Path | None] = []
+        seen_cookie_jar_paths: list[Path | None] = []
 
         def fake_scrape_places_sequential(
             place_urls: list[str],
             **kwargs: object,
         ) -> list[PlaceScrapeResult]:
             browser_session = kwargs["browser_session"]
+            http_session = kwargs["http_session"]
             self.assertIsInstance(browser_session, BrowserSessionConfig)
+            self.assertIsInstance(http_session, HttpSessionConfig)
             seen_profile_dirs.append(browser_session.profile_dir)
+            seen_cookie_jar_paths.append(http_session.cookie_jar_path)
             return [
                 PlaceScrapeResult(source_url=place_url, attempts=1)
                 for place_url in place_urls
@@ -138,6 +142,7 @@ class PlaceScraperTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             profile_dir = Path(tmp_dir) / "session"
+            cookie_jar_path = Path(tmp_dir) / "cookies.txt"
             with (
                 patch(
                     "gmaps_scraper.place_scraper._scrape_places_sequential",
@@ -148,6 +153,7 @@ class PlaceScraperTests(unittest.TestCase):
                 results = scrape_places(
                     ["url-1", "url-2", "url-3"],
                     browser_session=BrowserSessionConfig(profile_dir=profile_dir),
+                    http_session=HttpSessionConfig(cookie_jar_path=cookie_jar_path),
                     max_concurrency=2,
                     stagger_ms=10,
                 )
@@ -155,6 +161,15 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(
             sorted(path for path in seen_profile_dirs if path is not None),
             sorted([profile_dir / "worker-1", profile_dir / "worker-2"]),
+        )
+        self.assertEqual(
+            sorted(path for path in seen_cookie_jar_paths if path is not None),
+            sorted(
+                [
+                    cookie_jar_path.parent / "cookies.worker-1.txt",
+                    cookie_jar_path.parent / "cookies.worker-2.txt",
+                ]
+            ),
         )
         self.assertEqual([result.source_url for result in results], ["url-1", "url-2", "url-3"])
 

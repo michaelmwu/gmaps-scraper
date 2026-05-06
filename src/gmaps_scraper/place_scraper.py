@@ -1078,6 +1078,10 @@ def _scrape_places_parallel(
             browser_session,
             worker_index=worker_index,
         )
+        worker_http_session = _http_session_for_parallel_worker(
+            http_session,
+            worker_index=worker_index,
+        )
         worker_urls = [place_url for _, place_url in items]
         worker_results = _scrape_places_sequential(
             worker_urls,
@@ -1085,7 +1089,7 @@ def _scrape_places_parallel(
             timeout_ms=timeout_ms,
             settle_time_ms=settle_time_ms,
             browser_session=worker_session,
-            http_session=http_session,
+            http_session=worker_http_session,
             llm_fallback=llm_fallback,
             llm_policy=llm_policy,
             max_retries=max_retries,
@@ -1135,60 +1139,20 @@ def _browser_session_for_parallel_worker(
     )
 
 
-def _scrape_place_once_with_retries(
-    place_url: str,
-    *,
-    headless: bool,
-    timeout_ms: int,
-    settle_time_ms: int,
-    browser_session: BrowserSessionConfig | None,
+def _http_session_for_parallel_worker(
     http_session: HttpSessionConfig | None,
-    llm_fallback: PlaceLLMRepairer | None,
-    llm_policy: Literal["never", "on_quality_failure", "always"],
-    max_retries: int,
-    retry_backoff_ms: int,
-    retry_quality_flags: Sequence[str],
-    screenshot_path: Path | None,
-    overview_screenshot_path: Path | None,
-) -> PlaceScrapeResult:
-    attempts = 0
-    last_error: str | None = None
-    last_place: PlaceDetails | None = None
-    while attempts <= max_retries:
-        attempts += 1
-        try:
-            place = scrape_place(
-                place_url,
-                headless=headless,
-                timeout_ms=timeout_ms,
-                settle_time_ms=settle_time_ms,
-                browser_session=browser_session,
-                http_session=http_session,
-                llm_fallback=llm_fallback,
-                llm_policy=llm_policy,
-                screenshot_path=screenshot_path,
-                overview_screenshot_path=overview_screenshot_path,
-            )
-        except Exception as exc:
-            last_error = str(exc)
-        else:
-            last_place = place
-            if not _should_retry_place_result(place, retry_quality_flags):
-                return PlaceScrapeResult(
-                    source_url=place_url,
-                    place=place,
-                    attempts=attempts,
-                )
-            last_error = "quality flags: " + ", ".join(
-                place.diagnostics.quality_flags if place.diagnostics is not None else []
-            )
-        if attempts <= max_retries and retry_backoff_ms > 0:
-            time.sleep((retry_backoff_ms * attempts) / 1000)
-    return PlaceScrapeResult(
-        source_url=place_url,
-        place=last_place,
-        error=last_error or "Place scrape failed.",
-        attempts=attempts,
+    *,
+    worker_index: int,
+) -> HttpSessionConfig | None:
+    if http_session is None or http_session.cookie_jar_path is None:
+        return http_session
+    cookie_jar_path = http_session.cookie_jar_path
+    return HttpSessionConfig(
+        cookie_jar_path=(
+            cookie_jar_path.parent
+            / f"{cookie_jar_path.stem}.worker-{worker_index + 1}{cookie_jar_path.suffix}"
+        ),
+        proxy=http_session.proxy,
     )
 
 
