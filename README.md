@@ -405,6 +405,13 @@ contains non-English script components and the scraper can safely normalize them
 it also returns `address_display_en` or `category_display_en` plus source/confidence
 metadata.
 
+Downstream refresh jobs can avoid extra LLM calls by doing a deterministic scrape
+first, then reusing prior English display fields when the raw `address` or
+`category` is unchanged. The public helpers `needs_display_en`,
+`reusable_place_display_fields`, and `reuse_place_display_fields` expose the same
+script detection and reuse rules used by the scraper, so consumers do not need to
+copy translation-memory logic.
+
 `price_range` is Google Maps' raw display string, such as `SGD 100+`,
 `NT$2,000+`, `¥10,000+`, or `$$`; the scraper does not convert it into a
 currency-normalized budget. `about_sections` groups visible About-tab attributes

@@ -24,7 +24,10 @@ from gmaps_scraper import (
     collect_place_snapshot,
     default_place_selector_recipe,
     load_place_selector_recipe,
+    needs_display_en,
     openai_compatible_place_repairer_from_env,
+    reusable_place_display_fields,
+    reuse_place_display_fields,
     scrape_place,
     scrape_places,
     scrape_saved_list,
@@ -55,7 +58,10 @@ class PublicApiTests(unittest.TestCase):
         self.assertTrue(callable(cached_place_repairer))
         self.assertTrue(callable(default_place_selector_recipe))
         self.assertTrue(callable(load_place_selector_recipe))
+        self.assertTrue(callable(needs_display_en))
         self.assertTrue(callable(openai_compatible_place_repairer_from_env))
+        self.assertTrue(callable(reusable_place_display_fields))
+        self.assertTrue(callable(reuse_place_display_fields))
         self.assertTrue(callable(write_default_place_selector_recipe))
 
     def test_saved_list_serializes_library_shape(self) -> None:
