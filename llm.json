@@ -9,11 +9,6 @@
       "api_key_env": "ANTHROPIC_API_KEY",
       "base_url": "https://api.anthropic.com/v1",
       "base_url_env": "ANTHROPIC_OPENAI_BASE_URL"
-    },
-    "fireworks": {
-      "api_key_env": "FIREWORKS_API_KEY",
-      "base_url": "https://api.fireworks.ai/inference/v1",
-      "base_url_env": "FIREWORKS_OPENAI_BASE_URL"
     }
   },
   "models": {
