@@ -1,8 +1,9 @@
 # Contributing
 
-Thanks for improving `gmaps-scraper`. This project is intentionally conservative:
-Google Maps changes often, so changes should prefer structured extraction,
-fixtures, and narrow fallbacks over broad text heuristics.
+Thanks for improving `gmaps-scraper`. The project supports two main surfaces:
+saved-list parsing and individual place-page extraction. Changes should keep
+those boundaries clear and include tests that make the expected scraper behavior
+easy to review.
 
 ## Development Setup
 
@@ -10,6 +11,10 @@ fixtures, and narrow fallbacks over broad text heuristics.
 uv sync --dev
 uv run prek install
 ```
+
+`uv sync --dev` installs the project and development dependencies. `uv run prek
+install` installs the repository's git hooks so lint and type checks run before
+commits.
 
 Run the local gates before opening or updating a PR:
 
