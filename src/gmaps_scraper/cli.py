@@ -5,11 +5,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from collections.abc import Mapping
+from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
-from gmaps_scraper.debug_dump import write_debug_dump
-from gmaps_scraper.models import PlaceDetails
-from gmaps_scraper.place_scraper import scrape_place
+from gmaps_scraper.debug_dump import write_debug_dump, write_place_debug_dump
+from gmaps_scraper.llm import (
+    LLMRepairError,
+    cached_place_repairer,
+    openai_compatible_place_repairer_from_env,
+)
+from gmaps_scraper.models import PlaceDetails, PlaceLLMRepairRequest
+from gmaps_scraper.place_scraper import (
+    PlaceLLMRepairer,
+    _build_place_details,
+    _build_place_diagnostics,
+    _build_place_llm_evidence,
+    _hash_evidence,
+    _merge_llm_place_fields,
+    _merge_place_sources,
+    collect_place_snapshot,
+    scrape_place,
+    scrape_places,
+)
 from gmaps_scraper.scraper import (
     _HTTP_IMPERSONATE,
     DEFAULT_COLLECTION_MODE,
@@ -27,7 +47,7 @@ _DEFAULT_DEBUG_DIR_NAME = ".gmaps-debug"
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("url", help="Google Maps list or place URL")
+    parser.add_argument("urls", nargs="*", help="Google Maps list or place URL(s)")
     parser.add_argument(
         "--kind",
         choices=["list", "place"],
@@ -102,6 +122,71 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--screenshot-output-dir",
+        type=Path,
+        help="For place scraping, write page screenshots to this directory.",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        help=(
+            "For place scraping, read additional place URLs from a newline-delimited "
+            "file, or use '-' for stdin."
+        ),
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=1,
+        help="For batch place scraping, number of concurrent workers. Defaults to 1.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=1,
+        help=(
+            "For batch place scraping, per-place retries after failures or "
+            "retryable quality flags."
+        ),
+    )
+    parser.add_argument(
+        "--retry-backoff-ms",
+        type=int,
+        default=2_000,
+        help="For batch place scraping, linear retry backoff in milliseconds.",
+    )
+    parser.add_argument(
+        "--stagger-ms",
+        type=int,
+        default=0,
+        help="For batch place scraping, delay starts between URLs or workers.",
+    )
+    parser.add_argument(
+        "--llm-repair",
+        action="store_true",
+        help=(
+            "For place scraping, enable optional OpenAI-compatible LLM repair "
+            "from OPENAI_API_KEY, OPENAI_BASE_URL, and LLM_MODEL."
+        ),
+    )
+    parser.add_argument(
+        "--llm-policy",
+        choices=["never", "on_quality_failure", "always"],
+        default="on_quality_failure",
+        help="When to call the optional LLM repair callback for place scraping.",
+    )
+    parser.add_argument(
+        "--llm-env-file",
+        type=Path,
+        default=Path(".env"),
+        help="Env file to read for optional LLM repair settings.",
+    )
+    parser.add_argument(
+        "--llm-cache-dir",
+        type=Path,
+        help="Cache optional LLM place repairs in this directory.",
+    )
+    parser.add_argument(
         "--dump-debug-output",
         action="store_true",
         help=(
@@ -116,6 +201,8 @@ def main() -> int:
     """Run the CLI."""
     parser = build_parser()
     args = parser.parse_args()
+    if not args.urls and args.input is None:
+        parser.error("at least one URL or --input is required.")
     browser_session = None
     if args.session_dir is not None or args.proxy is not None:
         browser_session = BrowserSessionConfig(
@@ -135,8 +222,75 @@ def main() -> int:
                 "Place scraping currently requires browser mode. "
                 "Use `--fetch-mode browser`."
             )
-        if args.debug_output_dir is not None or args.dump_debug_output:
-            parser.error("Debug dump output is currently supported only for list scraping.")
+        if args.llm_cache_dir is not None and not args.llm_repair:
+            parser.error("`--llm-cache-dir` requires `--llm-repair`.")
+        llm_fallback = None
+        if args.llm_repair:
+            try:
+                llm_fallback = openai_compatible_place_repairer_from_env(
+                    env_file=args.llm_env_file,
+                )
+                if args.llm_cache_dir is not None:
+                    cache_namespace = (
+                        os.environ.get("LLM_MODEL")
+                        or os.environ.get("OPENAI_MODEL")
+                        or "default"
+                    )
+                    llm_fallback = cached_place_repairer(
+                        llm_fallback,
+                        cache_dir=args.llm_cache_dir,
+                        cache_namespace=cache_namespace,
+                    )
+            except LLMRepairError as exc:
+                parser.exit(1, f"{parser.prog}: error: {exc}\n")
+        place_urls = _read_place_urls(args.urls, args.input)
+        is_batch = len(place_urls) > 1 or args.input is not None
+        if is_batch:
+            if args.download_photo is not None or args.download_main_photo is not None:
+                parser.error("place photo downloads are supported only for one URL.")
+            if args.dump_debug_output or args.debug_output_dir is not None:
+                parser.error("place debug dumps are supported only for one URL.")
+            if args.screenshot_output_dir is None:
+                batch_results = scrape_places(
+                    place_urls,
+                    headless=not args.show_browser_window,
+                    timeout_ms=args.timeout_ms,
+                    settle_time_ms=args.settle_ms,
+                    browser_session=browser_session,
+                    http_session=http_session,
+                    llm_fallback=llm_fallback,
+                    llm_policy=args.llm_policy,
+                    max_concurrency=args.max_concurrency,
+                    max_retries=args.max_retries,
+                    retry_backoff_ms=args.retry_backoff_ms,
+                    stagger_ms=args.stagger_ms,
+                )
+            else:
+                batch_results = scrape_places(
+                    place_urls,
+                    headless=not args.show_browser_window,
+                    timeout_ms=args.timeout_ms,
+                    settle_time_ms=args.settle_ms,
+                    browser_session=browser_session,
+                    http_session=http_session,
+                    llm_fallback=llm_fallback,
+                    llm_policy=args.llm_policy,
+                    max_concurrency=args.max_concurrency,
+                    max_retries=args.max_retries,
+                    retry_backoff_ms=args.retry_backoff_ms,
+                    stagger_ms=args.stagger_ms,
+                    screenshot_output_dir=args.screenshot_output_dir,
+                )
+            payload = json.dumps(
+                {"results": [result.to_dict() for result in batch_results]},
+                indent=2,
+                ensure_ascii=False,
+            )
+            if args.output is not None:
+                args.output.write_text(f"{payload}\n", encoding="utf-8")
+            else:
+                print(payload)
+            return 0
         if (
             args.download_photo is not None
             and args.output is not None
@@ -157,14 +311,78 @@ def main() -> int:
             parser.error(
                 "`--download-photo` and `--download-main-photo` must be different paths."
             )
-        place_result = scrape_place(
-            args.url,
-            headless=not args.show_browser_window,
-            timeout_ms=args.timeout_ms,
-            settle_time_ms=args.settle_ms,
-            browser_session=browser_session,
-            http_session=http_session,
+        place_debug_output_dir = _resolve_place_debug_output_dir(
+            place_url=place_urls[0],
+            dump_debug_output=args.dump_debug_output,
+            debug_output_dir=args.debug_output_dir,
         )
+        if place_debug_output_dir is None:
+            screenshot_path = _place_screenshot_path(
+                args.screenshot_output_dir,
+                place_urls[0],
+                stage="reviews",
+            )
+            overview_screenshot_path = _place_screenshot_path(
+                args.screenshot_output_dir,
+                place_urls[0],
+                stage="overview",
+            )
+            if screenshot_path is None:
+                place_result = scrape_place(
+                    place_urls[0],
+                    headless=not args.show_browser_window,
+                    timeout_ms=args.timeout_ms,
+                    settle_time_ms=args.settle_ms,
+                    browser_session=browser_session,
+                    http_session=http_session,
+                    llm_fallback=llm_fallback,
+                    llm_policy=args.llm_policy,
+                )
+            else:
+                place_result = scrape_place(
+                    place_urls[0],
+                    headless=not args.show_browser_window,
+                    timeout_ms=args.timeout_ms,
+                    settle_time_ms=args.settle_ms,
+                    browser_session=browser_session,
+                    http_session=http_session,
+                    llm_fallback=llm_fallback,
+                    llm_policy=args.llm_policy,
+                    screenshot_path=screenshot_path,
+                    overview_screenshot_path=overview_screenshot_path,
+                )
+        else:
+            place_result, snapshot, merged_snapshot, evidence = _scrape_place_for_debug(
+                place_urls[0],
+                headless=not args.show_browser_window,
+                timeout_ms=args.timeout_ms,
+                settle_time_ms=args.settle_ms,
+                browser_session=browser_session,
+                http_session=http_session,
+                llm_fallback=llm_fallback,
+                llm_policy=args.llm_policy,
+                screenshot_path=_place_screenshot_path(
+                    args.screenshot_output_dir or (place_debug_output_dir / "artifacts"),
+                    place_urls[0],
+                    stage="reviews",
+                ),
+                overview_screenshot_path=_place_screenshot_path(
+                    args.screenshot_output_dir or (place_debug_output_dir / "artifacts"),
+                    place_urls[0],
+                    stage="overview",
+                ),
+            )
+            assert place_result.diagnostics is not None
+            write_place_debug_dump(
+                place_urls[0],
+                resolved_url=place_result.resolved_url,
+                snapshot=snapshot,
+                merged_snapshot=merged_snapshot,
+                details=place_result,
+                evidence=evidence,
+                diagnostics=place_result.diagnostics,
+                output_dir=place_debug_output_dir,
+            )
         if args.download_photo is not None:
             try:
                 _download_place_photo(
@@ -195,9 +413,19 @@ def main() -> int:
         parser.error(
             "`--download-photo` and `--download-main-photo` are supported only with `--kind place`."
         )
+    if args.llm_repair:
+        parser.error("`--llm-repair` is supported only with `--kind place`.")
+    if args.llm_cache_dir is not None:
+        parser.error("`--llm-cache-dir` is supported only with `--kind place`.")
+    if args.screenshot_output_dir is not None:
+        parser.error("`--screenshot-output-dir` is supported only with `--kind place`.")
+    if args.input is not None:
+        parser.error("`--input` is supported only with `--kind place`.")
+    if len(args.urls) != 1:
+        parser.error("list scraping requires exactly one URL.")
 
     artifacts, result = collect_saved_list_result(
-        args.url,
+        cast(str, args.urls[0]),
         headless=not args.show_browser_window,
         timeout_ms=args.timeout_ms,
         settle_time_ms=args.settle_ms,
@@ -206,14 +434,14 @@ def main() -> int:
         http_session=http_session,
     )
     debug_output_dir = _resolve_debug_output_dir(
-        list_url=args.url,
+        list_url=cast(str, args.urls[0]),
         resolved_url=artifacts.resolved_url,
         dump_debug_output=args.dump_debug_output,
         debug_output_dir=args.debug_output_dir,
     )
     if debug_output_dir is not None:
         write_debug_dump(
-            args.url,
+            args.urls[0],
             resolved_url=artifacts.resolved_url,
             runtime_state=artifacts.runtime_state,
             script_texts=artifacts.script_texts,
@@ -281,6 +509,120 @@ def _download_place_image(
         raise RuntimeError(f"Failed to download place photo: {exc}") from exc
 
 
+def _read_place_urls(urls: list[str], input_path: Path | None) -> list[str]:
+    result = list(urls)
+    if input_path is not None:
+        text = (
+            sys.stdin.read()
+            if str(input_path) == "-"
+            else input_path.read_text(encoding="utf-8")
+        )
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                result.append(stripped)
+    return result
+
+
+def _place_screenshot_path(
+    output_dir: Path | None,
+    place_url: str,
+    *,
+    stage: str,
+) -> Path | None:
+    if output_dir is None:
+        return None
+    slug = "".join(character.lower() if character.isalnum() else "-" for character in place_url)
+    slug = "-".join(part for part in slug.split("-") if part)
+    digest = sha256(place_url.encode("utf-8")).hexdigest()[:8]
+    return output_dir / f"{slug[:80] or 'place'}-{digest}-{stage}.png"
+
+
+def _scrape_place_for_debug(
+    place_url: str,
+    *,
+    headless: bool,
+    timeout_ms: int,
+    settle_time_ms: int,
+    browser_session: BrowserSessionConfig | None,
+    http_session: HttpSessionConfig | None,
+    llm_fallback: PlaceLLMRepairer | None,
+    llm_policy: str,
+    screenshot_path: Path | None = None,
+    overview_screenshot_path: Path | None = None,
+) -> tuple[PlaceDetails, dict[str, object], dict[str, object], dict[str, object]]:
+    snapshot = collect_place_snapshot(
+        place_url,
+        headless=headless,
+        timeout_ms=timeout_ms,
+        settle_time_ms=settle_time_ms,
+        browser_session=browser_session,
+        http_session=http_session,
+        screenshot_path=screenshot_path,
+        overview_screenshot_path=overview_screenshot_path,
+    )
+    raw_resolved_url = snapshot.get("resolved_url")
+    resolved_url = raw_resolved_url if isinstance(raw_resolved_url, str) else None
+    dom_snapshot = cast(
+        Mapping[str, object],
+        snapshot["dom"] if isinstance(snapshot.get("dom"), dict) else {},
+    )
+    preview_snapshot = cast(
+        Mapping[str, object],
+        snapshot["preview"] if isinstance(snapshot.get("preview"), dict) else {},
+    )
+    merged_snapshot = _merge_place_sources(dom_snapshot, preview_snapshot)
+    details = _build_place_details(place_url, resolved_url=resolved_url, snapshot=merged_snapshot)
+    evidence = _build_place_llm_evidence(merged_snapshot)
+    evidence_hash = _hash_evidence(evidence)
+    details.diagnostics = _build_place_diagnostics(
+        details,
+        merged_snapshot,
+        evidence_hash=evidence_hash,
+    )
+    if llm_fallback is None or llm_policy == "never":
+        return details, snapshot, merged_snapshot, evidence
+    if llm_policy not in {"always", "on_quality_failure"}:
+        raise ValueError(f"Unsupported llm_policy: {llm_policy}")
+    should_repair = llm_policy == "always" or bool(details.diagnostics.quality_flags)
+    if not should_repair:
+        return details, snapshot, merged_snapshot, evidence
+    details.diagnostics.prompt_version = "gmaps-place-repair-v1"
+    try:
+        repair = llm_fallback(
+            PlaceLLMRepairRequest(
+                source_url=place_url,
+                resolved_url=resolved_url,
+                current_fields=details.to_dict(),
+                diagnostics=details.diagnostics,
+                evidence=evidence,
+            )
+        )
+    except Exception as exc:
+        details.diagnostics.llm_error = str(exc)
+        return details, snapshot, merged_snapshot, evidence
+    if repair is None:
+        return details, snapshot, merged_snapshot, evidence
+    repaired_snapshot = _merge_llm_place_fields(
+        merged_snapshot,
+        repair,
+        current_fields=details.to_dict(),
+    )
+    repaired_details = _build_place_details(
+        place_url,
+        resolved_url=resolved_url,
+        snapshot=repaired_snapshot,
+    )
+    repaired_details.diagnostics = _build_place_diagnostics(
+        repaired_details,
+        repaired_snapshot,
+        evidence_hash=evidence_hash,
+        llm_used=True,
+        prompt_version="gmaps-place-repair-v1",
+    )
+    return repaired_details, snapshot, repaired_snapshot, evidence
+
+
 def _resolve_debug_output_dir(
     *,
     list_url: str,
@@ -294,3 +636,22 @@ def _resolve_debug_output_dir(
         return None
     list_id = extract_list_id(resolved_url or "") or extract_list_id(list_url) or "unknown-list"
     return Path(os.getcwd()) / _DEFAULT_DEBUG_DIR_NAME / list_id
+
+
+def _resolve_place_debug_output_dir(
+    *,
+    place_url: str,
+    dump_debug_output: bool,
+    debug_output_dir: Path | None,
+) -> Path | None:
+    if debug_output_dir is not None:
+        return debug_output_dir
+    if not dump_debug_output:
+        return None
+    return Path(os.getcwd()) / _DEFAULT_DEBUG_DIR_NAME / _slugify_debug_name(place_url)
+
+
+def _slugify_debug_name(value: str) -> str:
+    slug = "".join(character.lower() if character.isalnum() else "-" for character in value)
+    slug = "-".join(part for part in slug.split("-") if part)
+    return slug[:80] or "place"

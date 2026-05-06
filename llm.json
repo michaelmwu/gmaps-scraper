@@ -1,0 +1,47 @@
+{
+  "providers": {
+    "openai": {
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "base_url_env": "OPENAI_BASE_URL"
+    },
+    "anthropic": {
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url": "https://api.anthropic.com/v1",
+      "base_url_env": "ANTHROPIC_OPENAI_BASE_URL"
+    },
+    "fireworks": {
+      "api_key_env": "FIREWORKS_API_KEY",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "base_url_env": "FIREWORKS_OPENAI_BASE_URL"
+    }
+  },
+  "models": {
+    "gpt-5-mini": {
+      "provider": "openai",
+      "model": "gpt-5-mini",
+      "omit_temperature": true
+    },
+    "gpt-4o-mini": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "gpt-4.1-mini": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini"
+    },
+    "haiku": {
+      "provider": "anthropic",
+      "model": "claude-3-5-haiku-latest"
+    },
+    "sonnet": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514"
+    }
+  },
+  "request_options": {
+    "response_format": {
+      "type": "json_object"
+    }
+  }
+}

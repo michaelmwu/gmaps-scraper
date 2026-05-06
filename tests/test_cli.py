@@ -8,8 +8,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from gmaps_scraper.cli import _download_place_photo, main
-from gmaps_scraper.models import PlaceDetails
+from gmaps_scraper.cli import _download_place_photo, _place_screenshot_path, main
+from gmaps_scraper.models import PlaceDetails, PlaceScrapeResult
 from gmaps_scraper.scraper import BrowserArtifacts, BrowserSessionConfig, HttpSessionConfig
 
 
@@ -58,6 +58,25 @@ def _result(payload: dict[str, object]) -> Mock:
 
 
 class CliTests(unittest.TestCase):
+    def test_place_screenshot_path_includes_digest_to_avoid_slug_collisions(self) -> None:
+        path_a = _place_screenshot_path(
+            Path("screenshots"),
+            "https://maps.app.goo.gl/example-a",
+            stage="overview",
+        )
+        path_b = _place_screenshot_path(
+            Path("screenshots"),
+            "https://maps.app.goo.gl/example_a",
+            stage="overview",
+        )
+
+        self.assertIsNotNone(path_a)
+        self.assertIsNotNone(path_b)
+        assert path_a is not None
+        assert path_b is not None
+        self.assertNotEqual(path_a.name, path_b.name)
+        self.assertRegex(path_a.name, r"-[0-9a-f]{8}-overview[.]png$")
+
     def test_prints_json_to_stdout(self) -> None:
         stdout = io.StringIO()
         artifacts = _artifacts()
@@ -226,6 +245,8 @@ class CliTests(unittest.TestCase):
             settle_time_ms=3_000,
             browser_session=None,
             http_session=None,
+            llm_fallback=None,
+            llm_policy="on_quality_failure",
         )
         collect_saved_list_result.assert_not_called()
 
@@ -480,6 +501,246 @@ class CliTests(unittest.TestCase):
                 cookie_jar_path=Path(tmp_dir) / "cookies.txt",
                 proxy=None,
             ),
+            llm_fallback=None,
+            llm_policy="on_quality_failure",
+        )
+
+    def test_place_kind_can_enable_llm_repair_from_env(self) -> None:
+        stdout = io.StringIO()
+        details = PlaceDetails(
+            source_url="https://www.google.com/maps/place/Den",
+            resolved_url="https://www.google.com/maps/place/Den",
+            name="Den",
+            category="Japanese restaurant",
+            rating=4.4,
+            review_count=324,
+            address="Tokyo, Japan",
+        )
+        llm_fallback = Mock()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "gmaps-scraper",
+                    "https://www.google.com/maps/place/Den",
+                    "--kind",
+                    "place",
+                    "--llm-repair",
+                    "--llm-policy",
+                    "always",
+                    "--llm-env-file",
+                    ".env.test",
+                ],
+            ),
+            patch(
+                "gmaps_scraper.cli.openai_compatible_place_repairer_from_env",
+                return_value=llm_fallback,
+            ) as repairer_from_env,
+            patch("gmaps_scraper.cli.scrape_place", return_value=details) as scrape_place,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        repairer_from_env.assert_called_once_with(env_file=Path(".env.test"))
+        scrape_place.assert_called_once_with(
+            "https://www.google.com/maps/place/Den",
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=None,
+            http_session=None,
+            llm_fallback=llm_fallback,
+            llm_policy="always",
+        )
+
+    def test_place_kind_can_scrape_batch_from_input_file(self) -> None:
+        stdout = io.StringIO()
+        details = PlaceDetails(
+            source_url="https://www.google.com/maps/place/Den",
+            resolved_url="https://www.google.com/maps/place/Den",
+            name="Den",
+            category="Japanese restaurant",
+            rating=4.4,
+            review_count=324,
+            address="Tokyo, Japan",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "places.txt"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "https://www.google.com/maps/place/Den",
+                        "# skipped",
+                        "https://www.google.com/maps/place/Narisawa",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "gmaps-scraper",
+                        "--kind",
+                        "place",
+                        "--input",
+                        str(input_path),
+                        "--session-dir",
+                        str(Path(tmp_dir) / "session"),
+                        "--max-concurrency",
+                        "1",
+                        "--max-retries",
+                        "2",
+                        "--retry-backoff-ms",
+                        "750",
+                        "--stagger-ms",
+                        "250",
+                    ],
+                ),
+                patch(
+                    "gmaps_scraper.cli.scrape_places",
+                    return_value=[
+                        PlaceScrapeResult(
+                            source_url="https://www.google.com/maps/place/Den",
+                            place=details,
+                            attempts=1,
+                        ),
+                        PlaceScrapeResult(
+                            source_url="https://www.google.com/maps/place/Narisawa",
+                            error="blocked",
+                            attempts=3,
+                        ),
+                    ],
+                ) as scrape_places,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        scrape_places.assert_called_once_with(
+            [
+                "https://www.google.com/maps/place/Den",
+                "https://www.google.com/maps/place/Narisawa",
+            ],
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=BrowserSessionConfig(
+                profile_dir=Path(tmp_dir) / "session",
+                proxy=None,
+            ),
+            http_session=None,
+            llm_fallback=None,
+            llm_policy="on_quality_failure",
+            max_concurrency=1,
+            max_retries=2,
+            retry_backoff_ms=750,
+            stagger_ms=250,
+        )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["results"][0]["place"]["name"], "Den")
+        self.assertEqual(payload["results"][1]["error"], "blocked")
+
+    def test_place_kind_can_scrape_batch_from_command_line_urls(self) -> None:
+        stdout = io.StringIO()
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "gmaps-scraper",
+                    "--kind",
+                    "place",
+                    "https://www.google.com/maps/place/Den",
+                    "https://www.google.com/maps/place/Narisawa",
+                ],
+            ),
+            patch(
+                "gmaps_scraper.cli.scrape_places",
+                return_value=[
+                    PlaceScrapeResult(
+                        source_url="https://www.google.com/maps/place/Den",
+                        attempts=1,
+                    ),
+                    PlaceScrapeResult(
+                        source_url="https://www.google.com/maps/place/Narisawa",
+                        attempts=1,
+                    ),
+                ],
+            ) as scrape_places,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        scrape_places.assert_called_once_with(
+            [
+                "https://www.google.com/maps/place/Den",
+                "https://www.google.com/maps/place/Narisawa",
+            ],
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=None,
+            http_session=None,
+            llm_fallback=None,
+            llm_policy="on_quality_failure",
+            max_concurrency=1,
+            max_retries=1,
+            retry_backoff_ms=2_000,
+            stagger_ms=0,
+        )
+
+    def test_place_kind_can_scrape_batch_from_stdin(self) -> None:
+        stdout = io.StringIO()
+        stdin = io.StringIO(
+            "\n".join(
+                [
+                    "https://www.google.com/maps/place/Den",
+                    "# skipped",
+                    "https://www.google.com/maps/place/Narisawa",
+                ]
+            )
+        )
+        with (
+            patch("sys.stdin", stdin),
+            patch(
+                "sys.argv",
+                [
+                    "gmaps-scraper",
+                    "--kind",
+                    "place",
+                    "--input",
+                    "-",
+                ],
+            ),
+            patch(
+                "gmaps_scraper.cli.scrape_places",
+                return_value=[
+                    PlaceScrapeResult(
+                        source_url="https://www.google.com/maps/place/Den",
+                        attempts=1,
+                    ),
+                    PlaceScrapeResult(
+                        source_url="https://www.google.com/maps/place/Narisawa",
+                        attempts=1,
+                    ),
+                ],
+            ) as scrape_places,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        scrape_places.assert_called_once()
+        self.assertEqual(
+            scrape_places.call_args.args[0],
+            [
+                "https://www.google.com/maps/place/Den",
+                "https://www.google.com/maps/place/Narisawa",
+            ],
         )
 
     def test_download_place_photo_writes_bytes(self) -> None:
