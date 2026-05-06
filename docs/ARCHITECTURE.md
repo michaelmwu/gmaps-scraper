@@ -1,5 +1,52 @@
 # gmaps-scraper Architecture
 
+## Two Extraction Modes
+
+`gmaps-scraper` has two related but different scraping surfaces:
+
+- Saved lists: parse list metadata and saved place entries from Google Maps
+  runtime/preloaded payloads.
+- Place pages: parse detailed place facts from the rendered Google Maps place
+  panel, preview payloads, and conservative fallbacks.
+
+Saved-list scraping is primarily a structured payload problem. Place-page
+scraping is primarily a browser DOM problem. Keep the two paths separate unless
+a helper is genuinely generic, such as URL parsing or data models.
+
+## Saved List Extraction Strategy
+
+Saved-list URLs usually resolve to Google Maps pages containing placelist
+runtime data. The scraper prefers the HTTP/preloaded payload path because it is
+faster and easier to reproduce than a browser session. Browser artifacts remain
+available as fallback and for debugging.
+
+The parser treats the explicit placelist ID as the strongest signal:
+
+1. Extract the list ID from the resolved URL `!2s...` segment when available.
+2. Prefer runtime strings that contain that exact list ID.
+3. Fall back to strings containing `maps/placelists/list/`.
+4. Treat the placelist URL marker as a locator, not proof that the surrounding
+   node is the final parse target.
+
+Place entries inside saved lists are detected structurally. The coordinate tuple
+pattern `[null, null, lat, lng]` is the strongest signal for a saved place
+record. The parser then uses surrounding parent structures to recover name,
+address, note, favorite status, Google identifiers, ownership metadata, and a
+Maps search URL.
+
+Saved-list output preserves:
+
+- `source_url`: the caller-provided URL
+- `resolved_url`: the final URL after redirects
+- `list_id`, `title`, and `description`
+- owner and collaborator metadata
+- saved places with name, address, note, favorite status, coordinates, URL, and
+  optional identifiers
+
+Saved-list parsing should stay defensive. Google can reorder or extend runtime
+arrays without notice, so avoid hardcoded deep indexes unless a surrounding
+structural check makes them safe.
+
 ## Place Page Extraction Strategy
 
 `gmaps-scraper` treats Google Maps as an unstable HTML application, not a
