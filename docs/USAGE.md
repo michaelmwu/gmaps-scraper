@@ -107,6 +107,13 @@ also include raw investigation artifacts under `artifacts/` and a compact
 `selector-recipe.json`. Reuse selector recipes across sessions, not full DOM
 snapshots.
 
+Reviews and About collection are enabled by default for place scraping. Use
+`--skip-reviews` when you only need overview facts and do not want to open the
+Reviews tab. Use `--skip-about` when About-panel attributes are not needed.
+Skipping Reviews still preserves any review-count/topic evidence present on the
+overview page, but it will not expand the Reviews tab for more topics or visible
+review snippets.
+
 ## Optional LLM Repair
 
 LLM repair is opt-in. Deterministic DOM and preview extraction always run first.
@@ -119,6 +126,24 @@ uv run gmaps-scraper \
   URL \
   --kind place \
   --llm-repair
+```
+
+The LLM path is split into two generic tasks:
+
+- `dom_repair`: repair missing or suspicious Google Maps facts from sanitized
+  DOM evidence.
+- `display_translation`: produce English-readable `address_display_en` and
+  `category_display_en` when raw Google fields contain non-Latin display text.
+
+By default, `--llm-repair` enables both tasks. Restrict work with repeated
+`--llm-task` flags:
+
+```bash
+uv run gmaps-scraper \
+  URL \
+  --kind place \
+  --llm-repair \
+  --llm-task display_translation
 ```
 
 Configuration precedence is:

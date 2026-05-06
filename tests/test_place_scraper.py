@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gmaps_scraper.models import PlaceExtractionDiagnostics, PlaceScrapeResult
+from gmaps_scraper.models import (
+    PlaceExtractionDiagnostics,
+    PlaceLLMRepairRequest,
+    PlaceScrapeResult,
+)
 from gmaps_scraper.place_scraper import (
     _PLACE_JS_EXTRACTOR,
     _PLACE_REVIEW_TAB_CLICK_JS,
@@ -35,6 +39,7 @@ from gmaps_scraper.place_scraper import (
     _parse_review_count,
     _seed_google_consent_cookies,
     _should_use_llm_repair,
+    collect_place_snapshot,
     scrape_places,
 )
 from gmaps_scraper.scraper import BrowserSessionConfig, HttpSessionConfig, ScrapeError
@@ -60,6 +65,65 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn('element.closest("[data-review-id]")', _PLACE_JS_EXTRACTOR)
         self.assertIn("root.querySelectorAll(selector)", _PLACE_JS_EXTRACTOR)
         self.assertIn(r"return /(^|\W)reviews?(\W|$)/i.test(label);", _PLACE_JS_EXTRACTOR)
+
+    def test_collect_place_snapshot_can_skip_reviews_and_about_tabs(self) -> None:
+        class _FakePage:
+            url = "https://www.google.com/maps/place/Den"
+
+            def __init__(self) -> None:
+                self.evaluate_calls = 0
+
+            def goto(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def wait_for_load_state(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def wait_for_selector(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def wait_for_timeout(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def reload(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def evaluate(self, script: object) -> object:
+                self.evaluate_calls += 1
+                if script == _PLACE_JS_EXTRACTOR:
+                    return {"name": "Den"}
+                return True
+
+            def close(self) -> None:
+                pass
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.page = _FakePage()
+                self.closed = False
+
+            def new_page(self) -> _FakePage:
+                return self.page
+
+            def close(self) -> None:
+                self.closed = True
+
+        context = _FakeContext()
+        with (
+            patch("gmaps_scraper.place_scraper._launch_browser_context", return_value=context),
+            patch("gmaps_scraper.place_scraper._handle_google_consent"),
+            patch("gmaps_scraper.place_scraper._ensure_review_signal"),
+            patch("gmaps_scraper.place_scraper._collect_preview_place_enrichment", return_value={}),
+        ):
+            snapshot = collect_place_snapshot(
+                "https://www.google.com/maps/place/Den",
+                collect_reviews=False,
+                collect_about=False,
+            )
+
+        self.assertTrue(context.closed)
+        self.assertEqual(snapshot["dom"], {"name": "Den"})
+        self.assertEqual(context.page.evaluate_calls, 1)
 
     def test_scrape_places_reuses_context_and_retries_quality_flags(self) -> None:
         class _FakeContext:
@@ -430,6 +494,46 @@ class PlaceScraperTests(unittest.TestCase):
                 ),
             )
         )
+
+    def test_llm_tasks_scope_quality_gate_and_request(self) -> None:
+        calls: list[PlaceLLMRepairRequest] = []
+        snapshot = {
+            "resolved_url": "https://www.google.com/maps/place/Den",
+            "dom": {
+                "name": "Den",
+                "category": "테스트카테고리",
+                "rating": "4.4",
+                "review_count": "324",
+                "address": "Tokyo, Japan",
+            },
+            "preview": {},
+        }
+
+        details = _build_place_details_from_snapshot(
+            "https://www.google.com/maps/place/Den",
+            snapshot=snapshot,
+            llm_fallback=lambda request: calls.append(request)
+            or {"category_display_en": "Test Category"},
+            llm_policy="on_quality_failure",
+            llm_tasks=("dom_repair",),
+        )
+
+        self.assertNotEqual(details.category_display_en, "Test Category")
+        self.assertEqual(calls, [])
+
+        details = _build_place_details_from_snapshot(
+            "https://www.google.com/maps/place/Den",
+            snapshot=snapshot,
+            llm_fallback=lambda request: calls.append(request)
+            or {"category_display_en": "Test Category"},
+            llm_policy="on_quality_failure",
+            llm_tasks=("display_translation",),
+        )
+
+        self.assertEqual(details.category_display_en, "Test Category")
+        request = calls[-1]
+        self.assertEqual(request.tasks, ["display_translation"])
+        self.assertEqual(request.diagnostics.quality_flags, ["needs_category_display_en"])
 
     def test_build_place_details_marks_cached_repair_without_llm_use(self) -> None:
         details = _build_place_details_from_snapshot(

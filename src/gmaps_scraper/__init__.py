@@ -26,6 +26,7 @@ from gmaps_scraper.models import (
 from gmaps_scraper.parser import ParseError, parse_saved_list_artifacts
 from gmaps_scraper.place_scraper import (
     PlaceLLMRepairer,
+    PlaceLLMTask,
     collect_place_snapshot,
     scrape_place,
     scrape_places,
@@ -66,6 +67,7 @@ __all__ = [
     "PlaceExtractionDiagnostics",
     "PlaceLLMRepairRequest",
     "PlaceLLMRepairer",
+    "PlaceLLMTask",
     "PlaceReview",
     "PlaceScrapeResult",
     "ReviewTopic",
