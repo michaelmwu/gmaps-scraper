@@ -9,7 +9,7 @@ import sys
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from gmaps_scraper.debug_dump import write_debug_dump, write_place_debug_dump
 from gmaps_scraper.llm import (
@@ -19,13 +19,18 @@ from gmaps_scraper.llm import (
 )
 from gmaps_scraper.models import PlaceDetails, PlaceLLMRepairRequest
 from gmaps_scraper.place_scraper import (
+    _PLACE_LLM_PROMPT_VERSION,
     PlaceLLMRepairer,
     _build_place_details,
     _build_place_diagnostics,
     _build_place_llm_evidence,
+    _extract_llm_repair_source,
     _hash_evidence,
     _merge_llm_place_fields,
     _merge_place_sources,
+    _place_detail_values,
+    _repair_source_used_llm,
+    _should_use_llm_repair,
     collect_place_snapshot,
     scrape_place,
     scrape_places,
@@ -580,20 +585,20 @@ def _scrape_place_for_debug(
         merged_snapshot,
         evidence_hash=evidence_hash,
     )
-    if llm_fallback is None or llm_policy == "never":
+    if llm_fallback is None or not _should_use_llm_repair(
+        cast(Literal["never", "on_quality_failure", "always"], llm_policy),
+        details.diagnostics,
+    ):
         return details, snapshot, merged_snapshot, evidence
     if llm_policy not in {"always", "on_quality_failure"}:
         raise ValueError(f"Unsupported llm_policy: {llm_policy}")
-    should_repair = llm_policy == "always" or bool(details.diagnostics.quality_flags)
-    if not should_repair:
-        return details, snapshot, merged_snapshot, evidence
-    details.diagnostics.prompt_version = "gmaps-place-repair-v1"
+    details.diagnostics.prompt_version = _PLACE_LLM_PROMPT_VERSION
     try:
         repair = llm_fallback(
             PlaceLLMRepairRequest(
                 source_url=place_url,
                 resolved_url=resolved_url,
-                current_fields=details.to_dict(),
+                current_fields=_place_detail_values(details),
                 diagnostics=details.diagnostics,
                 evidence=evidence,
             )
@@ -603,10 +608,11 @@ def _scrape_place_for_debug(
         return details, snapshot, merged_snapshot, evidence
     if repair is None:
         return details, snapshot, merged_snapshot, evidence
+    repair_source = _extract_llm_repair_source(repair)
     repaired_snapshot = _merge_llm_place_fields(
         merged_snapshot,
         repair,
-        current_fields=details.to_dict(),
+        current_fields=_place_detail_values(details),
     )
     repaired_details = _build_place_details(
         place_url,
@@ -617,8 +623,9 @@ def _scrape_place_for_debug(
         repaired_details,
         repaired_snapshot,
         evidence_hash=evidence_hash,
-        llm_used=True,
-        prompt_version="gmaps-place-repair-v1",
+        llm_used=_repair_source_used_llm(repair_source),
+        repair_source=repair_source,
+        prompt_version=_PLACE_LLM_PROMPT_VERSION,
     )
     return repaired_details, snapshot, repaired_snapshot, evidence
 

@@ -14,7 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from gmaps_scraper.models import PlaceLLMRepairRequest
+from gmaps_scraper.models import PLACE_LLM_REPAIR_FIELDS, PlaceLLMRepairRequest
 from gmaps_scraper.translation_memory import (
     TranslationMemory,
     write_learned_translation_memory,
@@ -94,19 +94,30 @@ def openai_compatible_place_repairer_from_env(
     timeout_seconds: float = 45.0,
 ) -> Callable[[PlaceLLMRepairRequest], Mapping[str, object] | None]:
     """Build a provider-neutral place repair callback from OpenAI-style env vars."""
-    resolved = _resolve_llm_config_from_env(
-        env_file=env_file or Path(".env"),
-        default_config_file=default_config_file or _DEFAULT_CONFIG_PATH,
-        local_config_file=local_config_file or _DEFAULT_LOCAL_CONFIG_PATH,
-    )
+    resolved: _ResolvedLLMConfig | None = None
+    resolved_lock = threading.Lock()
+
+    def get_resolved_config() -> _ResolvedLLMConfig:
+        nonlocal resolved
+        if resolved is not None:
+            return resolved
+        with resolved_lock:
+            if resolved is None:
+                resolved = _resolve_llm_config_from_env(
+                    env_file=env_file or Path(".env"),
+                    default_config_file=default_config_file or _DEFAULT_CONFIG_PATH,
+                    local_config_file=local_config_file or _DEFAULT_LOCAL_CONFIG_PATH,
+                )
+            return resolved
 
     def repair(request: PlaceLLMRepairRequest) -> Mapping[str, object] | None:
+        resolved_config = get_resolved_config()
         return openai_compatible_place_repair(
             request,
-            api_key=resolved.api_key,
-            base_url=resolved.base_url,
-            model=resolved.model,
-            request_options=resolved.request_options,
+            api_key=resolved_config.api_key,
+            base_url=resolved_config.base_url,
+            model=resolved_config.model,
+            request_options=resolved_config.request_options,
             timeout_seconds=timeout_seconds,
         )
 
@@ -125,13 +136,13 @@ def cached_place_repairer(
         learned_memory_path = cache_dir / "translation-memory.learned.json"
         learned_repair = _repair_from_translation_memory(request, learned_memory_path)
         if learned_repair is not None:
-            return learned_repair
+            return _with_repair_source(learned_repair, "translation_memory")
 
         cache_key = _place_repair_cache_key(request, cache_namespace=cache_namespace)
         cache_path = cache_dir / f"{cache_key}.json"
         cached = _read_cached_repair(cache_path)
         if cached is not None:
-            return cached
+            return _with_repair_source(cached, "cache")
 
         result = repairer(request)
         if result is not None:
@@ -140,6 +151,7 @@ def cached_place_repairer(
                 current_fields=request.current_fields,
                 repair=result,
             )
+            result_with_source = _with_repair_source(result, "llm")
             _write_cached_repair(
                 cache_path,
                 {
@@ -149,9 +161,10 @@ def cached_place_repairer(
                     "resolved_url": request.resolved_url,
                     "evidence_hash": request.diagnostics.evidence_hash,
                     "prompt_version": request.diagnostics.prompt_version,
-                    "repair": dict(result),
+                    "repair": dict(result_with_source),
                 },
             )
+            return result_with_source
         return result
 
     return repair
@@ -183,6 +196,15 @@ def _repair_from_translation_memory(
     if "needs_address_display_en" in quality_flags and "address_display_en" not in fields:
         return None
     return {"fields": fields} if fields else None
+
+
+def _with_repair_source(
+    repair: Mapping[str, object],
+    repair_source: str,
+) -> Mapping[str, object]:
+    result = dict(repair)
+    result["_repair_source"] = repair_source
+    return result
 
 
 def _place_repair_cache_key(
@@ -245,45 +267,15 @@ def openai_compatible_place_repair(
                 "You repair Google Maps place extraction from sanitized DOM evidence. "
                 "Return only JSON. Only include fields directly supported by evidence. "
                 "Do not infer product-specific tags, neighborhoods, or marketing prose. "
-                "Never translate review text or review topics; preserve user-generated "
-                "review content exactly when included."
+                "Never translate review topic labels. Do not return user-generated "
+                "review text."
             ),
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
-                    "allowed_fields": [
-                        "name",
-                        "secondary_name",
-                        "category",
-                        "category_display_en",
-                        "category_display_en_source",
-                        "category_display_en_confidence",
-                        "rating",
-                        "review_count",
-                        "price_range",
-                        "address",
-                        "address_display_en",
-                        "address_display_en_source",
-                        "address_display_en_confidence",
-                        "located_in",
-                        "status",
-                        "website",
-                        "phone",
-                        "plus_code",
-                        "address_parts",
-                        "description",
-                        "main_photo_url",
-                        "photo_url",
-                        "lat",
-                        "lng",
-                        "limited_view",
-                        "google_place_id",
-                        "review_topics",
-                        "reviews",
-                        "about_sections",
-                    ],
+                    "allowed_fields": list(PLACE_LLM_REPAIR_FIELDS),
                     "review_topic_shape": {
                         "label": "string",
                         "count": "integer or null",

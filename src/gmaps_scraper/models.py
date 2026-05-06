@@ -7,6 +7,37 @@ from typing import Any
 
 type AddressParts = list[str | list[str]]
 
+PLACE_LLM_REPAIR_FIELDS: tuple[str, ...] = (
+    "name",
+    "secondary_name",
+    "category",
+    "category_display_en",
+    "category_display_en_source",
+    "category_display_en_confidence",
+    "rating",
+    "review_count",
+    "price_range",
+    "address",
+    "address_display_en",
+    "address_display_en_source",
+    "address_display_en_confidence",
+    "located_in",
+    "status",
+    "website",
+    "phone",
+    "plus_code",
+    "address_parts",
+    "description",
+    "main_photo_url",
+    "photo_url",
+    "lat",
+    "lng",
+    "limited_view",
+    "google_place_id",
+    "review_topics",
+    "about_sections",
+)
+
 
 @dataclass(slots=True)
 class ListOwner:
@@ -176,6 +207,7 @@ class PlaceExtractionDiagnostics:
     quality_flags: list[str] = field(default_factory=list)
     confidence: float | None = None
     llm_used: bool = False
+    repair_source: str | None = None
     llm_error: str | None = None
     evidence_hash: str | None = None
     prompt_version: str | None = None
@@ -191,6 +223,8 @@ class PlaceExtractionDiagnostics:
             result["missing_fields"] = self.missing_fields
         if self.confidence is not None:
             result["confidence"] = self.confidence
+        if self.repair_source is not None:
+            result["repair_source"] = self.repair_source
         if self.evidence_hash is not None:
             result["evidence_hash"] = self.evidence_hash
         if self.llm_error is not None:

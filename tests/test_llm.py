@@ -10,7 +10,11 @@ from gmaps_scraper.llm import (
     cached_place_repairer,
     openai_compatible_place_repairer_from_env,
 )
-from gmaps_scraper.models import PlaceExtractionDiagnostics, PlaceLLMRepairRequest
+from gmaps_scraper.models import (
+    PLACE_LLM_REPAIR_FIELDS,
+    PlaceExtractionDiagnostics,
+    PlaceLLMRepairRequest,
+)
 
 
 class _FakeHTTPResponse:
@@ -74,8 +78,11 @@ class LLMConfigTests(unittest.TestCase):
             first = cached(request)
             second = cached(request)
 
-        self.assertEqual(first, {"address_display_en": "Tokyo, Japan"})
-        self.assertEqual(second, {"address_display_en": "Tokyo, Japan"})
+        self.assertEqual(first, {"address_display_en": "Tokyo, Japan", "_repair_source": "llm"})
+        self.assertEqual(
+            second,
+            {"address_display_en": "Tokyo, Japan", "_repair_source": "cache"},
+        )
         self.assertEqual(len(calls), 1)
 
     def test_cached_place_repairer_reuses_learned_translation_memory(self) -> None:
@@ -95,7 +102,10 @@ class LLMConfigTests(unittest.TestCase):
             first = cached(_build_address_request("서울시, 강남구", "evidence-one"))
             second = cached(_build_address_request("서울시, 강남구", "evidence-two"))
 
-        self.assertEqual(first, {"address_display_en": "Seoul, Gangnam-gu"})
+        self.assertEqual(
+            first,
+            {"address_display_en": "Seoul, Gangnam-gu", "_repair_source": "llm"},
+        )
         self.assertEqual(
             second,
             {
@@ -103,10 +113,55 @@ class LLMConfigTests(unittest.TestCase):
                     "address_display_en": "Seoul, Gangnam-gu",
                     "address_display_en_source": "translation_memory",
                     "address_display_en_confidence": "medium",
-                }
+                },
+                "_repair_source": "translation_memory",
             },
         )
         self.assertEqual(len(calls), 1)
+
+    def test_cached_translation_memory_hit_does_not_require_model_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_dir = Path(tmp_dir)
+            (cache_dir / "translation-memory.learned.json").write_text(
+                json.dumps(
+                    {
+                        "entries": [
+                            {
+                                "source": "서울시, 강남구",
+                                "target": "Seoul, Gangnam-gu",
+                                "field_kinds": ["address"],
+                                "source_method": "learned",
+                                "confidence": "medium",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {}, clear=True):
+                repairer = openai_compatible_place_repairer_from_env(
+                    env_file=cache_dir / ".env",
+                    default_config_file=cache_dir / "llm.json",
+                    local_config_file=cache_dir / "llm.local.json",
+                )
+                cached = cached_place_repairer(
+                    repairer,
+                    cache_dir=cache_dir,
+                    cache_namespace="gpt-test",
+                )
+                result = cached(_build_address_request("서울시, 강남구", "evidence-one"))
+
+        self.assertEqual(
+            result,
+            {
+                "fields": {
+                    "address_display_en": "Seoul, Gangnam-gu",
+                    "address_display_en_source": "translation_memory",
+                    "address_display_en_confidence": "medium",
+                },
+                "_repair_source": "translation_memory",
+            },
+        )
 
     def test_gpt_5_mini_uses_checked_in_defaults_and_omits_temperature(self) -> None:
         captured: dict[str, object] = {}
@@ -143,6 +198,16 @@ class LLMConfigTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5-mini")
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertNotIn("temperature", payload)
+        messages = payload["messages"]
+        self.assertIsInstance(messages, list)
+        user_message = messages[1]
+        self.assertIsInstance(user_message, dict)
+        content = user_message["content"]
+        self.assertIsInstance(content, str)
+        self.assertEqual(
+            json.loads(content)["allowed_fields"],
+            list(PLACE_LLM_REPAIR_FIELDS),
+        )
 
     def test_local_config_can_define_fireworks_alias(self) -> None:
         captured: dict[str, object] = {}

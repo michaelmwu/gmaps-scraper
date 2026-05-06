@@ -31,6 +31,7 @@ from gmaps_scraper.place_scraper import (
     _normalize_preview_website,
     _normalize_review_topics,
     _normalize_reviews,
+    _normalize_website,
     _parse_review_count,
     _seed_google_consent_cookies,
     _should_use_llm_repair,
@@ -156,6 +157,37 @@ class PlaceScraperTests(unittest.TestCase):
             sorted([profile_dir / "worker-1", profile_dir / "worker-2"]),
         )
         self.assertEqual([result.source_url for result in results], ["url-1", "url-2", "url-3"])
+
+    def test_scrape_places_parallel_returns_worker_errors_per_url(self) -> None:
+        def fake_scrape_places_sequential(
+            place_urls: list[str],
+            **kwargs: object,
+        ) -> list[PlaceScrapeResult]:
+            del kwargs
+            if "bad-url" in place_urls:
+                raise RuntimeError("context launch failed")
+            return [
+                PlaceScrapeResult(source_url=place_url, attempts=1)
+                for place_url in place_urls
+            ]
+
+        with (
+            patch(
+                "gmaps_scraper.place_scraper._scrape_places_sequential",
+                side_effect=fake_scrape_places_sequential,
+            ),
+            patch("gmaps_scraper.place_scraper.time.sleep"),
+        ):
+            results = scrape_places(
+                ["ok-url", "bad-url"],
+                max_concurrency=2,
+            )
+
+        self.assertEqual(results[0].source_url, "ok-url")
+        self.assertIsNone(results[0].error)
+        self.assertEqual(results[1].source_url, "bad-url")
+        self.assertEqual(results[1].attempts, 0)
+        self.assertIn("context launch failed", results[1].error or "")
 
     def test_scrape_places_strips_input_urls_before_scraping(self) -> None:
         seen_urls: list[str] = []
@@ -383,6 +415,33 @@ class PlaceScraperTests(unittest.TestCase):
                 ),
             )
         )
+
+    def test_build_place_details_marks_cached_repair_without_llm_use(self) -> None:
+        details = _build_place_details_from_snapshot(
+            "https://www.google.com/maps/place/Den",
+            snapshot={
+                "resolved_url": "https://www.google.com/maps/place/Den",
+                "dom": {
+                    "name": "Den",
+                    "category": "Restaurant",
+                    "rating": "4.4",
+                    "review_count": "324",
+                    "address": "Tokyo, Japan",
+                },
+                "preview": {},
+            },
+            llm_fallback=lambda _request: {
+                "fields": {"website": "https://example.com"},
+                "_repair_source": "cache",
+            },
+            llm_policy="always",
+        )
+
+        self.assertEqual(details.website, "https://example.com")
+        self.assertIsNotNone(details.diagnostics)
+        assert details.diagnostics is not None
+        self.assertFalse(details.diagnostics.llm_used)
+        self.assertEqual(details.diagnostics.repair_source, "cache")
 
     def test_build_place_details_uses_dom_fields_and_body_fallbacks(self) -> None:
         details = _build_place_details(
@@ -1270,6 +1329,13 @@ class PlaceScraperTests(unittest.TestCase):
             )
         )
 
+    def test_normalize_website_rejects_non_http_urls(self) -> None:
+        self.assertEqual(_normalize_website("https://example.com"), "https://example.com")
+        self.assertEqual(_normalize_website("http://example.com"), "http://example.com")
+        self.assertIsNone(_normalize_website("javascript:alert(1)"))
+        self.assertIsNone(_normalize_website("mailto:test@example.com"))
+        self.assertIsNone(_normalize_website("example.com"))
+
     def test_merge_place_sources_only_backfills_missing_fields(self) -> None:
         merged = _merge_place_sources(
             {
@@ -1300,23 +1366,55 @@ class PlaceScraperTests(unittest.TestCase):
                 "website": "https://example.com",
                 "address": "bad page chrome",
                 "field_sources": {"name": "dom", "website": "dom", "address": "dom"},
+                "review_topics": [{"text": "sushi, mentioned in 115 reviews"}],
+                "about_sections": [
+                    {
+                        "title": "Service options",
+                        "items": [{"label": "Dine-in"}],
+                    }
+                ],
             },
             {
                 "name": "Other Den",
                 "website": "example.com",
                 "address": "2 Chome Jingumae, Tokyo, Japan",
+                "reviews": [{"author": "Fake", "text": "Invented"}],
+                "review_topics": [
+                    {"label": "sushi", "count": 115},
+                    {"label": "sushi", "count": 999},
+                    {"label": "ramen", "count": 20},
+                ],
+                "about_sections": [
+                    {
+                        "title": "Service options",
+                        "items": [
+                            {"label": "Dine-in"},
+                            {"label": "Delivery"},
+                        ],
+                    }
+                ],
             },
             current_fields={
                 "name": "Den",
                 "website": "https://example.com",
                 "address": None,
+                "reviews": [],
+                "review_topics": [],
+                "about_sections": [],
             },
         )
 
         self.assertEqual(merged["name"], "Den")
         self.assertEqual(merged["website"], "https://example.com")
         self.assertEqual(merged["address"], "2 Chome Jingumae, Tokyo, Japan")
+        self.assertNotIn("reviews", merged)
+        self.assertEqual(merged["review_topics"], [{"label": "sushi", "count": 115}])
+        self.assertEqual(
+            merged["about_sections"],
+            [{"title": "Service options", "items": [{"label": "Dine-in"}]}],
+        )
         self.assertEqual(merged["field_sources"]["address"], "llm")
+        self.assertEqual(merged["field_sources"]["review_topics"], "llm")
 
     def test_seed_google_consent_cookies_uses_page_context(self) -> None:
         class _FakeContext:

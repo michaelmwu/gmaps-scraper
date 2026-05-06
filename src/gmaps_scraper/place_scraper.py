@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from gmaps_scraper.models import (
+    PLACE_LLM_REPAIR_FIELDS,
     AddressParts,
     PlaceAboutItem,
     PlaceAboutSection,
@@ -964,6 +965,7 @@ def _build_place_details_from_snapshot(
     if repair is None:
         return details
 
+    repair_source = _extract_llm_repair_source(repair)
     repaired_snapshot = _merge_llm_place_fields(
         merged_snapshot,
         repair,
@@ -978,7 +980,8 @@ def _build_place_details_from_snapshot(
         repaired_details,
         repaired_snapshot,
         evidence_hash=evidence_hash,
-        llm_used=True,
+        llm_used=_repair_source_used_llm(repair_source),
+        repair_source=repair_source,
         prompt_version=_PLACE_LLM_PROMPT_VERSION,
     )
     return repaired_details
@@ -1097,16 +1100,22 @@ def _scrape_places_parallel(
         ]
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [
-            executor.submit(scrape_worker, (worker_index, chunk))
+        future_items = {
+            executor.submit(scrape_worker, (worker_index, chunk)): chunk
             for worker_index, chunk in enumerate(chunks)
             if chunk
-        ]
-        for future in as_completed(futures):
+        }
+        for future in as_completed(future_items):
             try:
                 worker_results = future.result()
             except Exception as exc:
-                raise ScrapeError(f"Parallel place worker failed: {exc}") from exc
+                for index, place_url in future_items[future]:
+                    results[index] = PlaceScrapeResult(
+                        source_url=place_url,
+                        attempts=0,
+                        error=f"Parallel place worker failed: {exc}",
+                    )
+                continue
             for index, result in worker_results:
                 results[index] = result
 
@@ -1575,37 +1584,7 @@ def _is_missing_value(value: object) -> bool:
     return False
 
 
-_LLM_REPAIR_FIELDS = {
-    "name",
-    "secondary_name",
-    "category",
-    "category_display_en",
-    "category_display_en_source",
-    "category_display_en_confidence",
-    "rating",
-    "review_count",
-    "price_range",
-    "address",
-    "address_display_en",
-    "address_display_en_source",
-    "address_display_en_confidence",
-    "located_in",
-    "status",
-    "website",
-    "phone",
-    "plus_code",
-    "address_parts",
-    "description",
-    "main_photo_url",
-    "photo_url",
-    "lat",
-    "lng",
-    "limited_view",
-    "google_place_id",
-    "review_topics",
-    "reviews",
-    "about_sections",
-}
+_LLM_REPAIR_FIELDS = set(PLACE_LLM_REPAIR_FIELDS)
 _QUALITY_CORE_FIELDS = ("name", "category", "rating", "review_count", "address")
 
 
@@ -1622,17 +1601,99 @@ def _merge_llm_place_fields(
     field_sources = dict(raw_sources) if isinstance(raw_sources, Mapping) else {}
 
     for key, value in fields.items():
+        if key == "_repair_source":
+            continue
         if not isinstance(key, str) or key not in _LLM_REPAIR_FIELDS:
             continue
         if _is_missing_value(value):
             continue
         if not _is_missing_value(current_fields.get(key)):
             continue
+        if key == "review_topics":
+            value = _filter_llm_review_topics_by_evidence(value, snapshot.get("review_topics"))
+            if _is_missing_value(value):
+                continue
+        if key == "about_sections":
+            value = _filter_llm_about_sections_by_evidence(value, snapshot.get("about_sections"))
+            if _is_missing_value(value):
+                continue
         merged[key] = value
         field_sources[key] = "llm"
 
     merged["field_sources"] = field_sources
     return merged
+
+
+def _extract_llm_repair_source(repair: Mapping[str, object]) -> str:
+    raw_source = repair.get("_repair_source")
+    if isinstance(raw_source, str) and raw_source.strip():
+        return raw_source.strip()
+    return "llm"
+
+
+def _repair_source_used_llm(repair_source: str) -> bool:
+    return repair_source not in {"cache", "translation_memory"}
+
+
+def _filter_llm_review_topics_by_evidence(
+    value: object,
+    raw_evidence: object,
+) -> list[dict[str, object]]:
+    evidence_text = json.dumps(raw_evidence, ensure_ascii=False).casefold()
+    if not evidence_text or evidence_text == "null":
+        return []
+    evidence_digits = re.sub(r"\D", "", evidence_text)
+    if not isinstance(value, list):
+        return []
+    topics: list[ReviewTopic] = []
+    labels_seen: dict[str, int] = {}
+    for item in value:
+        topic = _review_topic_from_mapping(item) if isinstance(item, Mapping) else None
+        if topic is None:
+            topic = _parse_review_topic_candidate(item)
+        if topic is None:
+            continue
+        if topic.label.casefold() not in evidence_text:
+            continue
+        if topic.count is not None and str(topic.count) not in evidence_digits:
+            continue
+        key = topic.label.casefold()
+        existing_index = labels_seen.get(key)
+        if existing_index is None:
+            labels_seen[key] = len(topics)
+            topics.append(topic)
+            continue
+        existing = topics[existing_index]
+        if existing.count is None or (
+            topic.count is not None and topic.count > existing.count
+        ):
+            topics[existing_index] = topic
+    return [topic.to_dict() for topic in topics]
+
+
+def _filter_llm_about_sections_by_evidence(
+    value: object,
+    raw_evidence: object,
+) -> list[dict[str, object]]:
+    evidence_text = json.dumps(raw_evidence, ensure_ascii=False).casefold()
+    if not evidence_text or evidence_text == "null":
+        return []
+    result: list[dict[str, object]] = []
+    for section in _normalize_about_sections(value):
+        kept_items = [
+            item
+            for item in section.items
+            if item.label.casefold() in evidence_text
+        ]
+        if not kept_items:
+            continue
+        title = section.title
+        if title.casefold() not in evidence_text:
+            title = "About"
+        result.append(
+            PlaceAboutSection(title=title, items=kept_items).to_dict()
+        )
+    return result
 
 
 def _derive_category_display_en(
@@ -1814,6 +1875,7 @@ def _build_place_diagnostics(
     *,
     evidence_hash: str,
     llm_used: bool = False,
+    repair_source: str | None = None,
     prompt_version: str | None = None,
 ) -> PlaceExtractionDiagnostics:
     values = _place_detail_values(details)
@@ -1868,6 +1930,7 @@ def _build_place_diagnostics(
         quality_flags=quality_flags,
         confidence=confidence,
         llm_used=llm_used,
+        repair_source=repair_source,
         evidence_hash=evidence_hash,
         prompt_version=prompt_version,
     )
@@ -3041,9 +3104,7 @@ def _normalize_website(value: object) -> str | None:
     text = _clean_text(value)
     if text is None:
         return None
-    if text.startswith("http://") or text.startswith("https://"):
-        return text
-    return text
+    return _normalize_preview_website(text)
 
 
 def _extract_coordinate_from_url(url: str, *, index: int) -> float | None:

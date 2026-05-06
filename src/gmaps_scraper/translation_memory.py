@@ -124,19 +124,24 @@ class TranslationMemory:
         if normalized is None or not needs_display_en(normalized):
             return None
 
-        translated = normalized
+        exact = _exact_address_translation(normalized, self._address_entries)
+        if exact is not None:
+            return exact
+
+        translated_parts: list[str] = []
         confidence = "high"
-        for pattern_entry in self._address_pattern_entries:
-            if pattern_entry.compiled_pattern is None:
+        for part in normalized.split(","):
+            translated_part = part.strip()
+            if not translated_part:
                 continue
-            next_translated = _apply_pattern_entry(pattern_entry, translated)
-            if next_translated != translated and pattern_entry.confidence != "high":
-                confidence = pattern_entry.confidence
-            translated = next_translated
-        for phrase_entry in self._address_entries:
-            if phrase_entry.source in translated and phrase_entry.confidence != "high":
-                confidence = phrase_entry.confidence
-            translated = translated.replace(phrase_entry.source, phrase_entry.target)
+            translated_part, confidence = _translate_address_component(
+                translated_part,
+                pattern_entries=self._address_pattern_entries,
+                phrase_entries=self._address_entries,
+                confidence=confidence,
+            )
+            translated_parts.append(translated_part)
+        translated = ", ".join(translated_parts)
         translated = _clean_translated_address(translated)
         if translated == normalized or needs_display_en(translated):
             return None
@@ -145,6 +150,47 @@ class TranslationMemory:
             source="translation_memory",
             confidence=confidence,
         )
+
+
+def _exact_address_translation(
+    normalized: str,
+    entries: Sequence[TranslationMemoryEntry],
+) -> TranslationResult | None:
+    for entry in entries:
+        if normalized != entry.source:
+            continue
+        translated = _clean_translated_address(entry.target)
+        if translated == normalized or needs_display_en(translated):
+            return None
+        return TranslationResult(
+            text=translated,
+            source="translation_memory",
+            confidence=entry.confidence,
+        )
+    return None
+
+
+def _translate_address_component(
+    value: str,
+    *,
+    pattern_entries: Sequence[TranslationPatternEntry],
+    phrase_entries: Sequence[TranslationMemoryEntry],
+    confidence: str,
+) -> tuple[str, str]:
+    translated = value
+    next_confidence = confidence
+    for pattern_entry in pattern_entries:
+        if pattern_entry.compiled_pattern is None:
+            continue
+        next_translated = _apply_pattern_entry(pattern_entry, translated)
+        if next_translated != translated and pattern_entry.confidence != "high":
+            next_confidence = pattern_entry.confidence
+        translated = next_translated
+    for phrase_entry in phrase_entries:
+        if phrase_entry.source in translated and phrase_entry.confidence != "high":
+            next_confidence = phrase_entry.confidence
+        translated = translated.replace(phrase_entry.source, phrase_entry.target)
+    return translated, next_confidence
 
 
 def needs_display_en(value: str | None) -> bool:

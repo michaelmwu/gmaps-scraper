@@ -8,7 +8,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from gmaps_scraper.cli import _download_place_photo, _place_screenshot_path, main
+from gmaps_scraper.cli import (
+    _download_place_photo,
+    _place_screenshot_path,
+    _scrape_place_for_debug,
+    main,
+)
 from gmaps_scraper.models import PlaceDetails, PlaceScrapeResult
 from gmaps_scraper.scraper import BrowserArtifacts, BrowserSessionConfig, HttpSessionConfig
 
@@ -554,6 +559,63 @@ class CliTests(unittest.TestCase):
             llm_fallback=llm_fallback,
             llm_policy="always",
         )
+
+    def test_debug_place_scrape_uses_production_llm_quality_gate(self) -> None:
+        llm_fallback = Mock(return_value={"fields": {"rating": 4.8}})
+        snapshot = {
+            "resolved_url": "https://www.google.com/maps/place/Den",
+            "dom": {
+                "name": "Den",
+                "category": "Japanese restaurant",
+                "address": "Tokyo, Japan",
+            },
+            "preview": {},
+        }
+
+        with patch("gmaps_scraper.cli.collect_place_snapshot", return_value=snapshot):
+            details, _snapshot, _merged_snapshot, _evidence = _scrape_place_for_debug(
+                "https://www.google.com/maps/place/Den",
+                headless=True,
+                timeout_ms=30_000,
+                settle_time_ms=3_000,
+                browser_session=None,
+                http_session=None,
+                llm_fallback=llm_fallback,
+                llm_policy="on_quality_failure",
+            )
+
+        llm_fallback.assert_not_called()
+        self.assertIsNotNone(details.diagnostics)
+        assert details.diagnostics is not None
+        self.assertIn("no_reputation_or_contact", details.diagnostics.quality_flags)
+
+    def test_debug_place_scrape_passes_unstripped_current_fields_to_llm(self) -> None:
+        llm_fallback = Mock(return_value=None)
+        snapshot = {
+            "resolved_url": "https://www.google.com/maps/place/Den",
+            "dom": {
+                "name": "Den",
+                "category": "Japanese restaurant",
+                "address": "Tokyo, Japan",
+            },
+            "preview": {},
+        }
+
+        with patch("gmaps_scraper.cli.collect_place_snapshot", return_value=snapshot):
+            _scrape_place_for_debug(
+                "https://www.google.com/maps/place/Den",
+                headless=True,
+                timeout_ms=30_000,
+                settle_time_ms=3_000,
+                browser_session=None,
+                http_session=None,
+                llm_fallback=llm_fallback,
+                llm_policy="always",
+            )
+
+        request = llm_fallback.call_args.args[0]
+        self.assertIn("rating", request.current_fields)
+        self.assertIsNone(request.current_fields["rating"])
 
     def test_place_kind_can_scrape_batch_from_input_file(self) -> None:
         stdout = io.StringIO()
