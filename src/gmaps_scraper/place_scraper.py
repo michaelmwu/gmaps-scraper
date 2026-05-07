@@ -673,6 +673,7 @@ _PLACE_JS_EXTRACTOR = r"""
       panel.querySelector(".dmRWX"),
       panel.querySelector(".F7nice")?.parentElement,
       panel.querySelector(".F7nice"),
+      panel,
     ].filter(Boolean);
     for (const root of roots) {
       const text = cleanLine(root.innerText || root.textContent || "");
@@ -2645,10 +2646,14 @@ def _looks_like_price_range_line(value: object) -> bool:
         return False
     if _PRICE_RANGE_PATTERN.search(normalized) is None:
         return False
+    if _CATEGORY_SUFFIX_PATTERN.search(normalized) is not None:
+        return True
+    if re.search(r"(?:reviews?|評論|クチコミ)", normalized, re.IGNORECASE):
+        return True
     return (
-        _parse_rating(normalized) is not None
-        or _parse_review_count(normalized) is not None
-        or _CATEGORY_SUFFIX_PATTERN.search(normalized) is not None
+        re.search(r"^[0-5](?:[.,][0-9])?\s*(?:[·⋅]|★|stars?\b)", normalized, re.IGNORECASE)
+        is not None
+        and re.search(r"\([0-9][0-9,.\s]*\)", normalized) is not None
     )
 
 
@@ -2710,13 +2715,24 @@ def _parse_price_amount(value: str) -> float | None:
     if not normalized:
         return None
     if "," in normalized and "." in normalized:
-        normalized = normalized.replace(",", "")
+        if normalized.rfind(",") > normalized.rfind("."):
+            normalized = normalized.replace(".", "").replace(",", ".")
+        else:
+            normalized = normalized.replace(",", "")
     elif normalized.count(",") == 1 and "." not in normalized:
         whole, fractional = normalized.split(",", 1)
         if len(fractional) in {1, 2}:
             normalized = f"{whole}.{fractional}"
         else:
             normalized = normalized.replace(",", "")
+    elif "," in normalized and "." not in normalized:
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+", normalized):
+            normalized = normalized.replace(",", "")
+        else:
+            return None
+    elif "." in normalized and "," not in normalized:
+        if re.fullmatch(r"\d{1,3}(?:[.]\d{3})+", normalized):
+            normalized = normalized.replace(".", "")
     else:
         normalized = normalized.replace(",", "")
     try:

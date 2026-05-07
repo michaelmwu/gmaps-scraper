@@ -27,6 +27,7 @@ from gmaps_scraper.place_scraper import (
     _extract_preview_description,
     _extract_preview_phone,
     _extract_preview_place_enrichment,
+    _extract_price_range_from_lines,
     _extract_review_count_from_lines,
     _extract_secondary_name,
     _hash_evidence,
@@ -39,6 +40,7 @@ from gmaps_scraper.place_scraper import (
     _normalize_review_topics,
     _normalize_reviews,
     _normalize_website,
+    _parse_price_amount,
     _parse_review_count,
     _seed_google_consent_cookies,
     _should_use_llm_repair,
@@ -371,6 +373,24 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(details.price_range, "$$")
 
+    def test_extract_price_range_from_lines_rejects_offer_quote_rows(self) -> None:
+        self.assertIsNone(
+            _extract_price_range_from_lines(
+                [
+                    "Admission · NT$100",
+                    "2 options · NT$5,293",
+                ]
+            )
+        )
+
+    def test_extract_price_range_from_lines_accepts_place_summary_rows(self) -> None:
+        self.assertEqual(
+            _extract_price_range_from_lines(
+                ["4.8 · (326) · NT$2,000+ · Fine dining restaurant"]
+            ),
+            "NT$2,000+",
+        )
+
     def test_build_place_details_summarizes_admission_prices_separately(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Shinjuku+Gyoen",
@@ -431,6 +451,28 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(details.admission_price)
         self.assertEqual(details.room_price, "NT$6,473")
 
+    def test_build_place_details_orders_comma_decimal_offer_prices(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Hotel",
+            resolved_url="https://www.google.com/maps/place/Hotel",
+            snapshot={
+                "name": "Hotel",
+                "category": "Hotel",
+                "rating": "4.2",
+                "review_count": "500",
+                "address": "Example address",
+                "room_prices": ["€999,00", "€1.234,56", "€2.000,00"],
+            },
+        )
+
+        self.assertEqual(details.room_price, "€1.234,56")
+
+    def test_parse_price_amount_handles_localized_grouping(self) -> None:
+        self.assertEqual(_parse_price_amount("1.234"), 1234.0)
+        self.assertEqual(_parse_price_amount("1.234.567"), 1234567.0)
+        self.assertEqual(_parse_price_amount("1.234,56"), 1234.56)
+        self.assertEqual(_parse_price_amount("1,234.56"), 1234.56)
+
     def test_place_js_extractor_prefers_data_item_address_rows(self) -> None:
         self.assertIn('const legacy = itemValue("address");', _PLACE_JS_EXTRACTOR)
         self.assertIn("if (legacy) {", _PLACE_JS_EXTRACTOR)
@@ -448,6 +490,7 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn("button[data-item-id^='phone:'] .Io6YTe", _PLACE_JS_EXTRACTOR)
         self.assertIn('plus_code: itemValue("oloc")', _PLACE_JS_EXTRACTOR)
         self.assertIn("a[data-item-id='authority']", _PLACE_JS_EXTRACTOR)
+        self.assertIn("panel,\n    ].filter(Boolean);", _PLACE_JS_EXTRACTOR)
 
     def test_place_js_extractor_collects_quote_sections_separately(self) -> None:
         self.assertIn(
