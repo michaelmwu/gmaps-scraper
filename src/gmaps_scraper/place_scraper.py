@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, cast
-from urllib.parse import parse_qs, parse_qsl, urlencode, unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from gmaps_scraper.models import (
     PLACE_LLM_DISPLAY_TRANSLATION_FIELDS,
