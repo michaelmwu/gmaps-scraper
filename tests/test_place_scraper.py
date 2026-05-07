@@ -461,6 +461,24 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(details.price_range)
         self.assertEqual(details.admission_price, "NT$320")
 
+    def test_build_place_details_uses_structural_admission_offers_before_address(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Tokyo+Tower",
+            resolved_url="https://www.google.com/maps/place/Tokyo+Tower",
+            snapshot={
+                "name": "Tokyo Tower",
+                "category": "Observation deck",
+                "rating": "4.5",
+                "review_count": "40,001",
+                "structural_offer_kind": "admission",
+                "structural_offer_prices": ["NT$320", "NT$320", "NT$420"],
+                "address": "4 Chome-2-8 Shibakoen, Minato City, Tokyo 105-0011, Japan",
+            },
+        )
+
+        self.assertEqual(details.admission_price, "NT$320")
+        self.assertIsNone(details.room_price)
+
     def test_build_place_details_summarizes_room_prices_separately(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Tokyo+Prince+Hotel",
@@ -491,6 +509,24 @@ class PlaceScraperTests(unittest.TestCase):
         )
 
         self.assertIsNone(details.price_range)
+        self.assertIsNone(details.admission_price)
+        self.assertEqual(details.room_price, "NT$6,473")
+
+    def test_build_place_details_uses_structural_room_offers_before_address(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Tokyo+Prince+Hotel",
+            resolved_url="https://www.google.com/maps/place/Tokyo+Prince+Hotel",
+            snapshot={
+                "name": "Tokyo Prince Hotel",
+                "category": "Hotel",
+                "rating": "4.2",
+                "review_count": "5,481",
+                "structural_offer_kind": "room",
+                "structural_offer_prices": ["NT$5,960", "NT$6,473", "NT$7,299"],
+                "address": "3 Chome-3-1 Shibakoen, Minato City, Tokyo 105-8560, Japan",
+            },
+        )
+
         self.assertIsNone(details.admission_price)
         self.assertEqual(details.room_price, "NT$6,473")
 
@@ -554,6 +590,12 @@ class PlaceScraperTests(unittest.TestCase):
         )
         self.assertIn(
             '"料金を比較"',
+            _PLACE_JS_EXTRACTOR,
+        )
+        self.assertIn("const detailsBoundaryTop = () => {", _PLACE_JS_EXTRACTOR)
+        self.assertIn('structural_offer_kind: structuralOffers.kind,', _PLACE_JS_EXTRACTOR)
+        self.assertIn(
+            'panel.querySelector(`[data-item-id="place-info-links:"]`)',
             _PLACE_JS_EXTRACTOR,
         )
         self.assertIn('button[aria-label*=\'per night\' i]', _PLACE_JS_EXTRACTOR)

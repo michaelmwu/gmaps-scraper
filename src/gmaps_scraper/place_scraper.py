@@ -126,45 +126,6 @@ _CATEGORY_SUFFIX_PATTERN = re.compile(
     r")\b$",
     re.IGNORECASE,
 )
-_ADMISSION_HEADING_ALIASES = (
-    "admission",
-    "ticket",
-    "tickets",
-    "ticket prices",
-    "entry fee",
-    "entrance fee",
-    "入場",
-    "入場料",
-    "入園料",
-    "票價",
-    "票价",
-    "門票",
-    "门票",
-)
-_COMPARE_PRICES_HEADING_ALIASES = (
-    "compare prices",
-    "compare room prices",
-    "room prices",
-    "價格比較",
-    "价格比较",
-    "比較價格",
-    "比較房價",
-    "料金を比較",
-    "価格を比較",
-    "宿泊料金を比較",
-)
-_ABOUT_TAB_ALIASES = (
-    "about",
-    "information",
-    "details",
-    "overview",
-    "關於",
-    "关于",
-    "資訊",
-    "信息",
-    "詳細",
-    "概要",
-)
 _ADMISSION_CONTEXT_PATTERN = re.compile(
     r"\b(?:admission|ticket|tickets|entry fee|entrance fee)\b|入場|入園|票價|票价|門票|门票",
     re.IGNORECASE,
@@ -397,6 +358,22 @@ _PLACE_JS_EXTRACTOR = r"""
       const value = rowValue(row);
       if (value && value !== "Address") {
         return value;
+      }
+    }
+    return null;
+  };
+  const addressRowElement = () => {
+    const legacy = panel.querySelector(`[data-item-id="address"]`);
+    if (legacy) {
+      return legacy;
+    }
+    for (const icon of panel.querySelectorAll(".google-symbols, [role='img']")) {
+      if (!isAddressIcon(icon)) {
+        continue;
+      }
+      const row = icon.closest(".LCF4w, .MngOvd, .RcCsl, [data-section-id]");
+      if (row) {
+        return row;
       }
     }
     return null;
@@ -718,6 +695,79 @@ _PLACE_JS_EXTRACTOR = r"""
     }
     return null;
   };
+  const detailsBoundaryTop = () => {
+    const selectors = [
+      `[data-item-id="address"]`,
+      `[data-item-id="authority"]`,
+      `[data-item-id="oloc"]`,
+      `[data-item-id="locatedin"]`,
+      `button[data-item-id^="phone:"]`,
+    ];
+    let boundary = Number.POSITIVE_INFINITY;
+    for (const selector of selectors) {
+      for (const element of panel.querySelectorAll(selector)) {
+        const rect = element.getBoundingClientRect();
+        if (rect.height <= 0) {
+          continue;
+        }
+        boundary = Math.min(boundary, rect.top);
+      }
+    }
+    const addressRow = addressRowElement();
+    if (addressRow) {
+      const rect = addressRow.getBoundingClientRect();
+      if (rect.height > 0) {
+        boundary = Math.min(boundary, rect.top);
+      }
+    }
+    return Number.isFinite(boundary) ? boundary : Number.POSITIVE_INFINITY;
+  };
+  const structuralOfferSignals = () => {
+    const titleTop = (
+      titleElement?.getBoundingClientRect()?.top
+      || panel.getBoundingClientRect().top
+    );
+    const boundaryTop = detailsBoundaryTop();
+    const prices = [];
+    const seenPrices = new Set();
+    for (const element of panel.querySelectorAll("*")) {
+      const text = cleanLine(element.innerText || element.textContent || "");
+      if (!text || text.length > 48) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.height <= 0 || rect.top <= titleTop || rect.top >= boundaryTop) {
+        continue;
+      }
+      if (
+        Array.from(element.children).some(
+          (child) => cleanLine(child.innerText || child.textContent || "") === text,
+        )
+      ) {
+        continue;
+      }
+      const price = extractPrice(text);
+      if (!price || price !== text || !exactNumericPricePattern.test(price)) {
+        continue;
+      }
+      if (seenPrices.has(price)) {
+        continue;
+      }
+      seenPrices.add(price);
+      prices.push(price);
+    }
+    const kind = (
+      prices.length > 0
+      ? (
+        roomOverlayPrice()
+        || panel.querySelector(`[data-item-id="place-info-links:"]`)
+          ? "room"
+          : "admission"
+      )
+      : null
+    );
+    return {kind, prices};
+  };
   const priceRangeValue = () => {
     const roots = [
       panel.querySelector(".dmRWX"),
@@ -737,6 +787,7 @@ _PLACE_JS_EXTRACTOR = r"""
     }
     return null;
   };
+  const structuralOffers = structuralOfferSignals();
 
   return {
     name: firstText(titleSelectors),
@@ -789,6 +840,8 @@ _PLACE_JS_EXTRACTOR = r"""
       "価格を比較",
       "宿泊料金を比較",
     ])),
+    structural_offer_kind: structuralOffers.kind,
+    structural_offer_prices: structuralOffers.prices,
     room_price_overlay: roomOverlayPrice(),
     dom_candidates: collectDomCandidates(),
     main_photo_url: mainPhotoUrl,
@@ -1831,10 +1884,18 @@ def _build_place_details(
     address_display_en, address_display_en_source, address_display_en_confidence = (
         _derive_address_display_en(address, snapshot)
     )
+    structural_offer_kind = _clean_text(snapshot.get("structural_offer_kind"))
+    structural_offer_prices = snapshot.get("structural_offer_prices")
+    admission_prices = snapshot.get("admission_prices")
+    room_prices = snapshot.get("room_prices")
+    if structural_offer_kind == "admission" and not admission_prices:
+        admission_prices = structural_offer_prices
+    if structural_offer_kind == "room" and not room_prices:
+        room_prices = structural_offer_prices
     price_range = _clean_price_range_text(
         snapshot.get("price_range")
     ) or _extract_price_range_from_lines(combined_lines)
-    admission_price = _summarize_offer_prices(snapshot.get("admission_prices")) or (
+    admission_price = _summarize_offer_prices(admission_prices) or (
         _extract_admission_price_from_lines(combined_lines)
     )
     if (
@@ -1858,7 +1919,7 @@ def _build_place_details(
         review_count=_resolve_review_count(snapshot, combined_lines),
         price_range=price_range,
         admission_price=admission_price,
-        room_price=_summarize_offer_prices(snapshot.get("room_prices"))
+        room_price=_summarize_offer_prices(room_prices)
         or _clean_numeric_price_text(snapshot.get("room_price_overlay")),
         # Structural DOM data is primary. Text-line fallback is a last resort
         # for preview/limited payloads and is intentionally conservative.
