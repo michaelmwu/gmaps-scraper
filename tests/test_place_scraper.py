@@ -15,6 +15,7 @@ from gmaps_scraper.place_scraper import (
     _PLACE_JS_EXTRACTOR,
     _PLACE_REVIEW_TAB_CLICK_JS,
     _PLACE_REVIEW_TOPIC_JS,
+    _PLACE_SEARCH_RESULT_CLICK_JS,
     _build_place_details,
     _build_place_details_from_snapshot,
     _build_place_diagnostics,
@@ -22,6 +23,7 @@ from gmaps_scraper.place_scraper import (
     _clean_category_text,
     _clean_name_text,
     _extract_address_from_lines,
+    _extract_admission_price_from_lines,
     _extract_preview_address,
     _extract_preview_coordinates,
     _extract_preview_description,
@@ -40,6 +42,7 @@ from gmaps_scraper.place_scraper import (
     _normalize_review_topics,
     _normalize_reviews,
     _normalize_website,
+    _open_place_result_from_search_page,
     _parse_price_amount,
     _parse_review_count,
     _seed_google_consent_cookies,
@@ -140,7 +143,7 @@ class PlaceScraperTests(unittest.TestCase):
 
             self.assertTrue(context.closed)
             self.assertEqual(snapshot["dom"], {"name": "Den"})
-            self.assertEqual(context.page.evaluate_calls, 1)
+            self.assertGreaterEqual(context.page.evaluate_calls, 2)
             review_signal.assert_not_called()
             self.assertEqual(screenshot_path.read_bytes(), b"screenshot")
 
@@ -391,6 +394,20 @@ class PlaceScraperTests(unittest.TestCase):
             "NT$2,000+",
         )
 
+    def test_extract_admission_price_from_lines_accepts_localized_headings(self) -> None:
+        self.assertEqual(
+            _extract_admission_price_from_lines(
+                [
+                    "門票",
+                    "官方網站",
+                    "NT$320",
+                    "Klook",
+                    "NT$320",
+                ]
+            ),
+            "NT$320",
+        )
+
     def test_build_place_details_summarizes_admission_prices_separately(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Shinjuku+Gyoen",
@@ -417,6 +434,32 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(details.price_range)
         self.assertEqual(details.admission_price, "NT$101.00")
         self.assertIsNone(details.room_price)
+
+    def test_build_place_details_moves_localized_admission_price_out_of_price_range(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Tokyo+Tower",
+            resolved_url="https://www.google.com/maps/place/Tokyo+Tower",
+            snapshot={
+                "name": "Tokyo Tower",
+                "category": "Observation deck",
+                "rating": "4.5",
+                "review_count": "40,001",
+                "price_range": "NT$320",
+                "address": "4 Chome-2-8 Shibakoen, Minato City, Tokyo 105-0011, Japan",
+                "body_text": "\n".join(
+                    [
+                        "門票",
+                        "官方網站",
+                        "NT$320",
+                        "Klook",
+                        "NT$320",
+                    ]
+                ),
+            },
+        )
+
+        self.assertIsNone(details.price_range)
+        self.assertEqual(details.admission_price, "NT$320")
 
     def test_build_place_details_summarizes_room_prices_separately(self) -> None:
         details = _build_place_details(
@@ -502,11 +545,15 @@ class PlaceScraperTests(unittest.TestCase):
             _PLACE_JS_EXTRACTOR.index("const priceRangeValue ="),
         )
         self.assertIn(
-            'admission_prices: collectLeafPrices(sectionRootByHeading("Admission"))',
+            "const headingAliases = (value) => Array.isArray(value) ? value : [value];",
             _PLACE_JS_EXTRACTOR,
         )
         self.assertIn(
-            'room_prices: collectLeafPrices(sectionRootByHeading("Compare prices"))',
+            '"門票"',
+            _PLACE_JS_EXTRACTOR,
+        )
+        self.assertIn(
+            '"料金を比較"',
             _PLACE_JS_EXTRACTOR,
         )
         self.assertIn('button[aria-label*=\'per night\' i]', _PLACE_JS_EXTRACTOR)
@@ -1636,6 +1683,35 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(details.main_photo_url)
         self.assertIsNone(details.photo_url)
 
+    def test_open_place_result_from_search_page_waits_for_place_title(self) -> None:
+        class _FakePage:
+            def __init__(self) -> None:
+                self.waited: list[object] = []
+                self.visited: list[tuple[str, str, int]] = []
+
+            def evaluate(self, script: object) -> object:
+                if script == _PLACE_SEARCH_RESULT_CLICK_JS:
+                    return "https://www.google.com/maps/place/National+Azabu"
+                return None
+
+            def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+                self.visited.append((url, wait_until, timeout))
+
+            def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+                self.waited.append(("load_state", state, timeout))
+
+            def wait_for_selector(self, selector: str, *, timeout: int, state: str) -> None:
+                self.waited.append(("selector", selector, timeout, state))
+
+        page = _FakePage()
+        with patch("gmaps_scraper.place_scraper._handle_google_consent"):
+            self.assertTrue(_open_place_result_from_search_page(page, timeout_ms=30_000))
+        self.assertEqual(
+            page.visited,
+            [("https://www.google.com/maps/place/National+Azabu", "domcontentloaded", 30_000)],
+        )
+        self.assertIn(("load_state", "load", 10_000), page.waited)
+
     def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:
         self.assertIsNone(
             _extract_secondary_name(
@@ -1655,6 +1731,13 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(
             _normalize_photo_url("https://lh3.googleusercontent.com/p/example=s680-w680-h510"),
             "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
+        )
+
+    def test_normalize_photo_url_rejects_google_static_map_urls(self) -> None:
+        self.assertIsNone(
+            _normalize_photo_url(
+                "https://maps.google.com/maps/api/staticmap?center=35.6530036,139.7223467"
+            )
         )
 
     def test_normalize_preview_website_rejects_streetview_thumbnail_urls(self) -> None:

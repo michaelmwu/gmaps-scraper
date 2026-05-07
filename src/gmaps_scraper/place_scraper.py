@@ -126,6 +126,49 @@ _CATEGORY_SUFFIX_PATTERN = re.compile(
     r")\b$",
     re.IGNORECASE,
 )
+_ADMISSION_HEADING_ALIASES = (
+    "admission",
+    "ticket",
+    "tickets",
+    "ticket prices",
+    "entry fee",
+    "entrance fee",
+    "入場",
+    "入場料",
+    "入園料",
+    "票價",
+    "票价",
+    "門票",
+    "门票",
+)
+_COMPARE_PRICES_HEADING_ALIASES = (
+    "compare prices",
+    "compare room prices",
+    "room prices",
+    "價格比較",
+    "价格比较",
+    "比較價格",
+    "比較房價",
+    "料金を比較",
+    "価格を比較",
+    "宿泊料金を比較",
+)
+_ABOUT_TAB_ALIASES = (
+    "about",
+    "information",
+    "details",
+    "overview",
+    "關於",
+    "关于",
+    "資訊",
+    "信息",
+    "詳細",
+    "概要",
+)
+_ADMISSION_CONTEXT_PATTERN = re.compile(
+    r"\b(?:admission|ticket|tickets|entry fee|entrance fee)\b|入場|入園|票價|票价|門票|门票",
+    re.IGNORECASE,
+)
 _PLUS_CODE_PATTERN = re.compile(
     r"\b[23456789CFGHJMPQRVWX]{4,8}\+[23456789CFGHJMPQRVWX]{2,3}"
     r"(?:\s+[^\n]+)?\b"
@@ -607,11 +650,18 @@ _PLACE_JS_EXTRACTOR = r"""
     }
     return text.includes("·") && pricePattern.test(text);
   };
+  const headingAliases = (value) => Array.isArray(value) ? value : [value];
+  const normalizedHeading = (value) => cleanLine(value).toLowerCase();
   const sectionRootByHeading = (headingText) => {
-    const expected = headingText.toLowerCase();
+    const aliases = headingAliases(headingText)
+      .map((value) => normalizedHeading(value))
+      .filter(Boolean);
+    if (aliases.length === 0) {
+      return null;
+    }
     for (const heading of panel.querySelectorAll("h2, h3, [role='heading']")) {
-      const text = cleanLine(heading.innerText || heading.textContent || "").toLowerCase();
-      if (text !== expected) {
+      const text = normalizedHeading(heading.innerText || heading.textContent || "");
+      if (!aliases.includes(text)) {
         continue;
       }
       return (
@@ -714,8 +764,31 @@ _PLACE_JS_EXTRACTOR = r"""
     ]),
     plus_code: itemValue("oloc"),
     review_topics: collectReviewTopics(),
-    admission_prices: collectLeafPrices(sectionRootByHeading("Admission")),
-    room_prices: collectLeafPrices(sectionRootByHeading("Compare prices")),
+    admission_prices: collectLeafPrices(sectionRootByHeading([
+      "Admission",
+      "Ticket prices",
+      "Entry fee",
+      "Entrance fee",
+      "入場",
+      "入場料",
+      "入園料",
+      "票價",
+      "票价",
+      "門票",
+      "门票",
+    ])),
+    room_prices: collectLeafPrices(sectionRootByHeading([
+      "Compare prices",
+      "Compare room prices",
+      "Room prices",
+      "價格比較",
+      "价格比较",
+      "比較價格",
+      "比較房價",
+      "料金を比較",
+      "価格を比較",
+      "宿泊料金を比較",
+    ])),
     room_price_overlay: roomOverlayPrice(),
     dom_candidates: collectDomCandidates(),
     main_photo_url: mainPhotoUrl,
@@ -869,15 +942,114 @@ _PLACE_REVIEW_SNIPPET_JS = r"""
 """
 _PLACE_ABOUT_TAB_CLICK_JS = r"""
 () => {
+  const aliases = [
+    "about",
+    "information",
+    "details",
+    "overview",
+    "關於",
+    "关于",
+    "資訊",
+    "信息",
+    "詳細",
+    "概要",
+  ];
   for (const tab of document.querySelectorAll("div[role='tablist'] button, button[role='tab']")) {
     const text = (tab.innerText || tab.textContent || "").trim();
     const ariaLabel = tab.getAttribute("aria-label") || "";
-    if (/(^|\b)(about|information|details)(\b|$)/i.test(`${text} ${ariaLabel}`)) {
+    const normalized = `${text} ${ariaLabel}`.toLowerCase();
+    if (aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
       tab.click();
       return true;
     }
   }
   return false;
+}
+"""
+_PLACE_SEARCH_RESULT_CLICK_JS = r"""
+() => {
+  const titleSelectors = ["h1.DUwDvf", "h1.lfPIob", "div[role='main'] h1"];
+  for (const selector of titleSelectors) {
+    const element = document.querySelector(selector);
+    if (element?.innerText?.trim()) {
+      return null;
+    }
+  }
+
+  const cleanLine = (value) => (value || "").replace(/\s+/g, " ").trim();
+  const normalize = (value) => cleanLine(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const queryUrl = new URL(window.location.href);
+  const queryPlaceId = cleanLine(queryUrl.searchParams.get("query_place_id") || "");
+  let queryText = cleanLine(queryUrl.searchParams.get("query") || "");
+  if (!queryText) {
+    const pathnameMatch = queryUrl.pathname.match(/\/maps\/search\/([^/]+)/i);
+    if (pathnameMatch?.[1]) {
+      try {
+        queryText = decodeURIComponent(pathnameMatch[1]);
+      } catch {
+        queryText = pathnameMatch[1];
+      }
+    }
+  }
+  const normalizedQuery = normalize(queryText);
+  const queryTokens = normalizedQuery.split(" ").filter((token) => token.length >= 3);
+  const articles = Array.from(document.querySelectorAll("div[role='feed'] [role='article']"));
+  let best = null;
+
+  for (let index = 0; index < articles.length; index += 1) {
+    const article = articles[index];
+    const anchor = article.querySelector("a.hfpxzc, a[aria-label], a[href*='/maps/place/']");
+    if (!anchor) {
+      continue;
+    }
+    const href = cleanLine(anchor.getAttribute("href") || anchor.href || "");
+    const label = cleanLine(anchor.getAttribute("aria-label") || anchor.innerText || "");
+    if (!label) {
+      continue;
+    }
+    const normalizedLabel = normalize(label);
+    const normalizedNearby = normalize(article.innerText || article.textContent || "");
+    let score = Math.max(0, 40 - index);
+
+    if (queryPlaceId && href.includes(queryPlaceId)) {
+      score += 200;
+    }
+    if (normalizedQuery) {
+      if (normalizedLabel === normalizedQuery) {
+        score += 120;
+      } else {
+        if (normalizedLabel && normalizedQuery.includes(normalizedLabel)) {
+          score += 50;
+        }
+        if (normalizedQuery && normalizedLabel.includes(normalizedQuery)) {
+          score += 40;
+        }
+      }
+      if (normalizedNearby.includes(normalizedQuery)) {
+        score += 30;
+      }
+    }
+    for (const token of queryTokens) {
+      if (normalizedLabel.includes(token)) {
+        score += 10;
+      }
+      if (normalizedNearby.includes(token)) {
+        score += 4;
+      }
+    }
+    if (!best || score > best.score) {
+      best = {href, score};
+    }
+  }
+
+  if (!best || best.score <= 0) {
+    return null;
+  }
+  return best.href || null;
 }
 """
 _PLACE_ABOUT_PANEL_JS = r"""
@@ -1445,6 +1617,7 @@ def _collect_place_snapshot_with_context(
         except Exception:
             pass
         _handle_google_consent(page, timeout_ms=timeout_ms)
+        _open_place_result_from_search_page(page, timeout_ms=timeout_ms)
         try:
             page.wait_for_selector(_TITLE_SELECTOR, timeout=timeout_ms, state="attached")
         except Exception:
@@ -1549,6 +1722,39 @@ def _ensure_review_signal(page: Any, *, timeout_ms: int) -> bool:
     return _wait_for_review_signal(page, timeout_ms=min(timeout_ms, 4_000))
 
 
+def _open_place_result_from_search_page(page: Any, *, timeout_ms: int) -> bool:
+    target_url = _search_result_candidate_url(page, timeout_ms=timeout_ms)
+    if target_url is None:
+        return False
+    try:
+        page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        return False
+    _handle_google_consent(page, timeout_ms=timeout_ms)
+    try:
+        page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
+    except Exception:
+        pass
+    try:
+        page.wait_for_selector(_TITLE_SELECTOR, timeout=min(timeout_ms, 10_000), state="attached")
+    except Exception:
+        return False
+    return True
+
+
+def _search_result_candidate_url(page: Any, *, timeout_ms: int) -> str | None:
+    polls = max(1, min(8, timeout_ms // 500))
+    for _ in range(polls):
+        try:
+            target_url = page.evaluate(_PLACE_SEARCH_RESULT_CLICK_JS)
+        except Exception:
+            return None
+        if isinstance(target_url, str) and target_url.strip():
+            return target_url.strip()
+        page.wait_for_timeout(500)
+    return None
+
+
 def _collect_review_panel_snapshot(page: Any, *, timeout_ms: int) -> dict[str, object]:
     try:
         clicked = page.evaluate(_PLACE_REVIEW_TAB_CLICK_JS)
@@ -1625,6 +1831,18 @@ def _build_place_details(
     address_display_en, address_display_en_source, address_display_en_confidence = (
         _derive_address_display_en(address, snapshot)
     )
+    price_range = _clean_price_range_text(
+        snapshot.get("price_range")
+    ) or _extract_price_range_from_lines(combined_lines)
+    admission_price = _summarize_offer_prices(snapshot.get("admission_prices")) or (
+        _extract_admission_price_from_lines(combined_lines)
+    )
+    if (
+        admission_price is not None
+        and price_range is not None
+        and re.fullmatch(r"\${1,4}", price_range) is None
+    ):
+        price_range = None
     return PlaceDetails(
         source_url=source_url,
         resolved_url=resolved_url,
@@ -1638,9 +1856,8 @@ def _build_place_details(
         category_display_en_confidence=category_display_en_confidence,
         rating=_parse_rating(snapshot.get("rating")),
         review_count=_resolve_review_count(snapshot, combined_lines),
-        price_range=_clean_price_range_text(snapshot.get("price_range"))
-        or _extract_price_range_from_lines(combined_lines),
-        admission_price=_summarize_offer_prices(snapshot.get("admission_prices")),
+        price_range=price_range,
+        admission_price=admission_price,
         room_price=_summarize_offer_prices(snapshot.get("room_prices"))
         or _clean_numeric_price_text(snapshot.get("room_price_overlay")),
         # Structural DOM data is primary. Text-line fallback is a last resort
@@ -2636,6 +2853,29 @@ def _extract_price_range_from_lines(lines: list[str]) -> str | None:
     return None
 
 
+def _extract_admission_price_from_lines(lines: list[str]) -> str | None:
+    candidates: list[str] = []
+    capture_following_prices = 0
+    for line in lines:
+        normalized = _clean_text(line)
+        if normalized is None:
+            continue
+        if _ADMISSION_CONTEXT_PATTERN.search(normalized):
+            capture_following_prices = 2
+            price = _clean_numeric_price_text(normalized)
+            if price is not None:
+                candidates.append(price)
+            continue
+        if capture_following_prices > 0:
+            capture_following_prices -= 1
+            price = _clean_numeric_price_text(normalized)
+            if price is not None:
+                candidates.append(price)
+    if not candidates:
+        return None
+    return _summarize_offer_prices(candidates)
+
+
 def _looks_like_price_range_line(value: object) -> bool:
     normalized = _clean_text(value)
     if normalized is None:
@@ -2829,6 +3069,8 @@ def _normalize_photo_url(value: object) -> str | None:
         or "default_geocode" in path
         or "mapslogo" in path
     ):
+        return None
+    if host == "maps.google.com" and path.startswith("/maps/api/staticmap"):
         return None
     if "streetviewpixels-pa.googleapis.com" in host:
         return None
