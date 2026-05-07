@@ -34,6 +34,7 @@ from gmaps_scraper.place_scraper import (
     _extract_review_count_from_lines,
     _extract_secondary_name,
     _hash_evidence,
+    _looks_like_google_maps_place_url,
     _merge_llm_place_fields,
     _merge_place_sources,
     _normalize_google_place_id,
@@ -1780,15 +1781,56 @@ class PlaceScraperTests(unittest.TestCase):
         )
         self.assertIn(("load_state", "load", 10_000), page.waited)
 
+    def test_open_place_result_from_search_page_rejects_non_google_place_urls(self) -> None:
+        class _FakePage:
+            def __init__(self) -> None:
+                self.visited: list[str] = []
+
+            def evaluate(self, _script: object) -> object:
+                return "https://example.com/maps/place/National+Azabu"
+
+            def wait_for_timeout(self, _value: int) -> None:
+                pass
+
+            def goto(self, url: str, **_kwargs: object) -> None:
+                self.visited.append(url)
+
+        page = _FakePage()
+        self.assertFalse(_open_place_result_from_search_page(page, timeout_ms=30_000))
+        self.assertEqual(page.visited, [])
+
+    def test_looks_like_google_maps_place_url_accepts_google_tlds_only(self) -> None:
+        self.assertTrue(
+            _looks_like_google_maps_place_url(
+                "https://www.google.co.jp/maps/place/National+Azabu"
+            )
+        )
+        self.assertTrue(
+            _looks_like_google_maps_place_url(
+                "https://maps.google.com/maps/place/National+Azabu"
+            )
+        )
+        self.assertFalse(
+            _looks_like_google_maps_place_url(
+                "https://example.com/maps/place/National+Azabu"
+            )
+        )
+        self.assertFalse(
+            _looks_like_google_maps_place_url(
+                "https://www.google.com.example.com/maps/place/National+Azabu"
+            )
+        )
+
     def test_search_result_candidate_url_stops_polling_on_place_page_sentinel(self) -> None:
         class _FakePage:
             def __init__(self) -> None:
                 self.evaluate_calls = 0
                 self.wait_calls = 0
+                self.evaluated_scripts: list[object] = []
 
             def evaluate(self, script: object) -> object:
                 self.evaluate_calls += 1
-                self.assertEqual(script, _PLACE_SEARCH_RESULT_CLICK_JS)
+                self.evaluated_scripts.append(script)
                 return False
 
             def wait_for_timeout(self, _value: int) -> None:
@@ -1797,6 +1839,7 @@ class PlaceScraperTests(unittest.TestCase):
         page = _FakePage()
         self.assertIsNone(_search_result_candidate_url(page, timeout_ms=30_000))
         self.assertEqual(page.evaluate_calls, 1)
+        self.assertEqual(page.evaluated_scripts, [_PLACE_SEARCH_RESULT_CLICK_JS])
         self.assertEqual(page.wait_calls, 0)
 
     def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:

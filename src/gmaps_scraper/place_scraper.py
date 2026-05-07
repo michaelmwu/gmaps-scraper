@@ -1799,6 +1799,8 @@ def _open_place_result_from_search_page(page: Any, *, timeout_ms: int) -> bool:
     target_url = _search_result_candidate_url(page, timeout_ms=timeout_ms)
     if target_url is None:
         return False
+    if not _looks_like_google_maps_place_url(target_url):
+        return False
     try:
         page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
@@ -1828,6 +1830,16 @@ def _search_result_candidate_url(page: Any, *, timeout_ms: int) -> str | None:
             return target_url.strip()
         page.wait_for_timeout(500)
     return None
+
+
+def _looks_like_google_maps_place_url(value: str) -> bool:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    if re.fullmatch(r"(?:www\.|maps\.)?google\.[a-z]{2,}(?:\.[a-z]{2,})?", host) is None:
+        return False
+    return parsed.path.startswith("/maps/place/")
 
 
 def _collect_review_panel_snapshot(page: Any, *, timeout_ms: int) -> dict[str, object]:
