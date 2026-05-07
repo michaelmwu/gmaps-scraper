@@ -999,19 +999,23 @@ _PLACE_ABOUT_TAB_CLICK_JS = r"""
     "about",
     "information",
     "details",
-    "overview",
     "關於",
     "关于",
     "資訊",
     "信息",
     "詳細",
     "概要",
+    "簡介",
+    "简介",
   ];
   for (const tab of document.querySelectorAll("div[role='tablist'] button, button[role='tab']")) {
-    const text = (tab.innerText || tab.textContent || "").trim();
-    const ariaLabel = tab.getAttribute("aria-label") || "";
-    const normalized = `${text} ${ariaLabel}`.toLowerCase();
-    if (aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
+    const text = ((tab.innerText || tab.textContent || "").trim()).toLowerCase();
+    const ariaLabel = ((tab.getAttribute("aria-label") || "").trim()).toLowerCase();
+    if (
+      aliases.some((alias) => (
+        text === alias || ariaLabel === alias || ariaLabel.endsWith(alias)
+      ))
+    ) {
       tab.click();
       return true;
     }
@@ -1025,7 +1029,7 @@ _PLACE_SEARCH_RESULT_CLICK_JS = r"""
   for (const selector of titleSelectors) {
     const element = document.querySelector(selector);
     if (element?.innerText?.trim()) {
-      return null;
+      return false;
     }
   }
 
@@ -1036,6 +1040,12 @@ _PLACE_SEARCH_RESULT_CLICK_JS = r"""
     .replace(/\s+/g, " ")
     .trim();
   const queryUrl = new URL(window.location.href);
+  const isSearchPage = /\/maps\/search(?:\/|$)/i.test(queryUrl.pathname)
+    || queryUrl.searchParams.has("query")
+    || queryUrl.searchParams.has("query_place_id");
+  if (!isSearchPage) {
+    return false;
+  }
   const queryPlaceId = cleanLine(queryUrl.searchParams.get("query_place_id") || "");
   let queryText = cleanLine(queryUrl.searchParams.get("query") || "");
   if (!queryText) {
@@ -1049,6 +1059,7 @@ _PLACE_SEARCH_RESULT_CLICK_JS = r"""
     }
   }
   const normalizedQuery = normalize(queryText);
+  const hasQueryContext = Boolean(queryPlaceId || normalizedQuery);
   const queryTokens = normalizedQuery.split(" ").filter((token) => token.length >= 3);
   const articles = Array.from(document.querySelectorAll("div[role='feed'] [role='article']"));
   let best = null;
@@ -1059,14 +1070,23 @@ _PLACE_SEARCH_RESULT_CLICK_JS = r"""
     if (!anchor) {
       continue;
     }
-    const href = cleanLine(anchor.getAttribute("href") || anchor.href || "");
+    const hrefValue = anchor.getAttribute("href") || anchor.href || "";
+    let href = "";
+    try {
+      href = cleanLine(new URL(hrefValue, window.location.href).href);
+    } catch {
+      continue;
+    }
+    if (!href.includes("/maps/place/")) {
+      continue;
+    }
     const label = cleanLine(anchor.getAttribute("aria-label") || anchor.innerText || "");
     if (!label) {
       continue;
     }
     const normalizedLabel = normalize(label);
     const normalizedNearby = normalize(article.innerText || article.textContent || "");
-    let score = Math.max(0, 40 - index);
+    let score = hasQueryContext ? Math.max(0, 40 - index) : 0;
 
     if (queryPlaceId && href.includes(queryPlaceId)) {
       score += 200;
@@ -1802,6 +1822,8 @@ def _search_result_candidate_url(page: Any, *, timeout_ms: int) -> str | None:
             target_url = page.evaluate(_PLACE_SEARCH_RESULT_CLICK_JS)
         except Exception:
             return None
+        if target_url is False:
+            return None
         if isinstance(target_url, str) and target_url.strip():
             return target_url.strip()
         page.wait_for_timeout(500)
@@ -1898,10 +1920,19 @@ def _build_place_details(
     admission_price = _summarize_offer_prices(admission_prices) or (
         _extract_admission_price_from_lines(combined_lines)
     )
+    admission_candidates = (
+        {
+            candidate
+            for item in admission_prices
+            if (candidate := _clean_numeric_price_text(item)) is not None
+        }
+        if isinstance(admission_prices, list)
+        else set()
+    )
     if (
-        admission_price is not None
-        and price_range is not None
+        price_range is not None
         and re.fullmatch(r"\${1,4}", price_range) is None
+        and (price_range == admission_price or price_range in admission_candidates)
     ):
         price_range = None
     return PlaceDetails(
@@ -3131,7 +3162,10 @@ def _normalize_photo_url(value: object) -> str | None:
         or "mapslogo" in path
     ):
         return None
-    if host == "maps.google.com" and path.startswith("/maps/api/staticmap"):
+    if path.startswith("/maps/api/staticmap") and (
+        host in {"maps.google.com", "www.google.com", "maps.googleapis.com"}
+        or host.endswith(".googleapis.com")
+    ):
         return None
     if "streetviewpixels-pa.googleapis.com" in host:
         return None

@@ -12,6 +12,7 @@ from gmaps_scraper.models import (
     PlaceScrapeResult,
 )
 from gmaps_scraper.place_scraper import (
+    _PLACE_ABOUT_TAB_CLICK_JS,
     _PLACE_JS_EXTRACTOR,
     _PLACE_REVIEW_TAB_CLICK_JS,
     _PLACE_REVIEW_TOPIC_JS,
@@ -45,6 +46,7 @@ from gmaps_scraper.place_scraper import (
     _open_place_result_from_search_page,
     _parse_price_amount,
     _parse_review_count,
+    _search_result_candidate_url,
     _seed_google_consent_cookies,
     _should_use_llm_repair,
     collect_place_snapshot,
@@ -479,6 +481,24 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(details.admission_price, "NT$320")
         self.assertIsNone(details.room_price)
 
+    def test_build_place_details_keeps_distinct_price_range_when_admission_differs(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Museum",
+            resolved_url="https://www.google.com/maps/place/Museum",
+            snapshot={
+                "name": "Museum",
+                "category": "Art museum",
+                "rating": "4.4",
+                "review_count": "1,234",
+                "price_range": "¥1,000–2,000",
+                "admission_prices": ["¥320", "¥320"],
+                "address": "Example address",
+            },
+        )
+
+        self.assertEqual(details.price_range, "¥1,000–2,000")
+        self.assertEqual(details.admission_price, "¥320")
+
     def test_build_place_details_summarizes_room_prices_separately(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Tokyo+Prince+Hotel",
@@ -591,6 +611,12 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn(
             '"料金を比較"',
             _PLACE_JS_EXTRACTOR,
+        )
+        self.assertNotIn('"overview"', _PLACE_ABOUT_TAB_CLICK_JS.lower())
+        self.assertIn("const isSearchPage =", _PLACE_SEARCH_RESULT_CLICK_JS)
+        self.assertIn(
+            "new URL(hrefValue, window.location.href).href",
+            _PLACE_SEARCH_RESULT_CLICK_JS,
         )
         self.assertIn("const detailsBoundaryTop = () => {", _PLACE_JS_EXTRACTOR)
         self.assertIn('structural_offer_kind: structuralOffers.kind,', _PLACE_JS_EXTRACTOR)
@@ -1754,6 +1780,25 @@ class PlaceScraperTests(unittest.TestCase):
         )
         self.assertIn(("load_state", "load", 10_000), page.waited)
 
+    def test_search_result_candidate_url_stops_polling_on_place_page_sentinel(self) -> None:
+        class _FakePage:
+            def __init__(self) -> None:
+                self.evaluate_calls = 0
+                self.wait_calls = 0
+
+            def evaluate(self, script: object) -> object:
+                self.evaluate_calls += 1
+                self.assertEqual(script, _PLACE_SEARCH_RESULT_CLICK_JS)
+                return False
+
+            def wait_for_timeout(self, _value: int) -> None:
+                self.wait_calls += 1
+
+        page = _FakePage()
+        self.assertIsNone(_search_result_candidate_url(page, timeout_ms=30_000))
+        self.assertEqual(page.evaluate_calls, 1)
+        self.assertEqual(page.wait_calls, 0)
+
     def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:
         self.assertIsNone(
             _extract_secondary_name(
@@ -1779,6 +1824,16 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(
             _normalize_photo_url(
                 "https://maps.google.com/maps/api/staticmap?center=35.6530036,139.7223467"
+            )
+        )
+        self.assertIsNone(
+            _normalize_photo_url(
+                "https://www.google.com/maps/api/staticmap?center=35.6530036,139.7223467"
+            )
+        )
+        self.assertIsNone(
+            _normalize_photo_url(
+                "https://maps.googleapis.com/maps/api/staticmap?center=35.6530036,139.7223467"
             )
         )
 
