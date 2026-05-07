@@ -578,97 +578,97 @@ _PLACE_JS_EXTRACTOR = r"""
     }
     return topics;
   };
+  const priceSymbols = "(?:[$€£¥₩₹₫฿₱₦₺₴₽]|SGD|USD|EUR|GBP|JPY|TWD|NT\\$|HK\\$|CA\\$|A\\$)";
+  const pricePattern = new RegExp(
+    "(?:^|\\s|·)((?:\\${1,4})|" + priceSymbols
+      + "\\s*[0-9][0-9,.\u00a0\\s]*(?:\\+|[-–]\\s*" + priceSymbols
+      + "?\\s*[0-9][0-9,.\u00a0\\s]*)?)",
+    "i",
+  );
+  const exactNumericPricePattern = new RegExp(
+    "^" + priceSymbols + "\\s*[0-9][0-9,.\u00a0\\s]*$",
+    "i",
+  );
+  const extractPrice = (value) => {
+    const text = cleanLine(value);
+    const match = text.match(pricePattern);
+    if (!match?.[1]) {
+      return null;
+    }
+    return cleanLine(match[1].replace(/\u00a0/g, " "));
+  };
+  const looksLikePriceRangeText = (value) => {
+    const text = cleanLine(value);
+    if (!text) {
+      return false;
+    }
+    if (/^\${1,4}$/.test(text)) {
+      return true;
+    }
+    return text.includes("·") && pricePattern.test(text);
+  };
+  const sectionRootByHeading = (headingText) => {
+    const expected = headingText.toLowerCase();
+    for (const heading of panel.querySelectorAll("h2, h3, [role='heading']")) {
+      const text = cleanLine(heading.innerText || heading.textContent || "").toLowerCase();
+      if (text !== expected) {
+        continue;
+      }
+      return (
+        heading.closest(".m6QErb, section, [role='region'], [data-section-id]")
+        || heading.parentElement
+        || null
+      );
+    }
+    return null;
+  };
+  const collectLeafPrices = (root) => {
+    if (!root) {
+      return [];
+    }
+    const prices = [];
+    const seen = new Set();
+    for (const element of root.querySelectorAll("*")) {
+      const text = cleanLine(element.innerText || element.textContent || "");
+      if (!text || text.length > 48) {
+        continue;
+      }
+      if (
+        Array.from(element.children).some(
+          (child) => cleanLine(child.innerText || child.textContent || "") === text,
+        )
+      ) {
+        continue;
+      }
+      const price = extractPrice(text);
+      if (!price || price !== text || !exactNumericPricePattern.test(price)) {
+        continue;
+      }
+      if (seen.has(price)) {
+        continue;
+      }
+      seen.add(price);
+      prices.push(price);
+    }
+    return prices;
+  };
+  const roomOverlayPrice = () => {
+    const selectors = [
+      ".rlmNhf button[aria-label]",
+      "button[aria-label*='per night' i]",
+      "button[aria-label*='prices from' i]",
+    ];
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        const price = extractPrice(element.getAttribute("aria-label") || "");
+        if (price && exactNumericPricePattern.test(price)) {
+          return price;
+        }
+      }
+    }
+    return null;
+  };
   const priceRangeValue = () => {
-    const symbols = "(?:[$€£¥₩₹₫฿₱₦₺₴₽]|SGD|USD|EUR|GBP|JPY|TWD|NT\\$|HK\\$|CA\\$|A\\$)";
-    const pattern = new RegExp(
-      "(?:^|\\s|·)((?:\\${1,4})|" + symbols
-        + "\\s*[0-9][0-9,.\u00a0\\s]*(?:\\+|[-–]\\s*" + symbols
-        + "?\\s*[0-9][0-9,.\u00a0\\s]*)?)",
-      "i",
-    );
-    const exactNumericPattern = new RegExp(
-      "^" + symbols + "\\s*[0-9][0-9,.\u00a0\\s]*$",
-      "i",
-    );
-    const extractPrice = (value) => {
-      const text = cleanLine(value);
-      const match = text.match(pattern);
-      if (!match?.[1]) {
-        return null;
-      }
-      return cleanLine(match[1].replace(/\u00a0/g, " "));
-    };
-    const looksLikePriceRangeText = (value) => {
-      const text = cleanLine(value);
-      if (!text) {
-        return false;
-      }
-      if (/^\${1,4}$/.test(text)) {
-        return true;
-      }
-      return text.includes("·") && pattern.test(text);
-    };
-    const sectionRootByHeading = (headingText) => {
-      const expected = headingText.toLowerCase();
-      for (const heading of panel.querySelectorAll("h2, h3, [role='heading']")) {
-        const text = cleanLine(heading.innerText || heading.textContent || "").toLowerCase();
-        if (text !== expected) {
-          continue;
-        }
-        return (
-          heading.closest(".m6QErb, section, [role='region'], [data-section-id]")
-          || heading.parentElement
-          || null
-        );
-      }
-      return null;
-    };
-    const collectLeafPrices = (root) => {
-      if (!root) {
-        return [];
-      }
-      const prices = [];
-      const seen = new Set();
-      for (const element of root.querySelectorAll("*")) {
-        const text = cleanLine(element.innerText || element.textContent || "");
-        if (!text || text.length > 48) {
-          continue;
-        }
-        if (
-          Array.from(element.children).some(
-            (child) => cleanLine(child.innerText || child.textContent || "") === text,
-          )
-        ) {
-          continue;
-        }
-        const price = extractPrice(text);
-        if (!price || price !== text || !exactNumericPattern.test(price)) {
-          continue;
-        }
-        if (seen.has(price)) {
-          continue;
-        }
-        seen.add(price);
-        prices.push(price);
-      }
-      return prices;
-    };
-    const roomOverlayPrice = () => {
-      const selectors = [
-        ".rlmNhf button[aria-label]",
-        "button[aria-label*='per night' i]",
-        "button[aria-label*='prices from' i]",
-      ];
-      for (const selector of selectors) {
-        for (const element of document.querySelectorAll(selector)) {
-          const price = extractPrice(element.getAttribute("aria-label") || "");
-          if (price && exactNumericPattern.test(price)) {
-            return price;
-          }
-        }
-      }
-      return null;
-    };
     const roots = [
       panel.querySelector(".dmRWX"),
       panel.querySelector(".F7nice")?.parentElement,
@@ -680,7 +680,7 @@ _PLACE_JS_EXTRACTOR = r"""
       if (!looksLikePriceRangeText(text)) {
         continue;
       }
-      const match = text.match(pattern);
+      const match = text.match(pricePattern);
       if (match?.[1]) {
         return cleanLine(match[1].replace(/\u00a0/g, " "));
       }

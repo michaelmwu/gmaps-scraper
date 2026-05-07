@@ -493,6 +493,14 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn("panel,\n    ].filter(Boolean);", _PLACE_JS_EXTRACTOR)
 
     def test_place_js_extractor_collects_quote_sections_separately(self) -> None:
+        self.assertLess(
+            _PLACE_JS_EXTRACTOR.index("const collectLeafPrices ="),
+            _PLACE_JS_EXTRACTOR.index("const priceRangeValue ="),
+        )
+        self.assertLess(
+            _PLACE_JS_EXTRACTOR.index("const roomOverlayPrice ="),
+            _PLACE_JS_EXTRACTOR.index("const priceRangeValue ="),
+        )
         self.assertIn(
             'admission_prices: collectLeafPrices(sectionRootByHeading("Admission"))',
             _PLACE_JS_EXTRACTOR,
