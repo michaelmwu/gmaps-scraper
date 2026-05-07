@@ -283,7 +283,7 @@ class PlaceDetails:
     address: str | None
     price_range: str | None = None
     admission_price: str | None = None
-    lodging_price: str | None = None
+    room_price: str | None = None
     category_display_en: str | None = None
     category_display_en_source: str | None = None
     category_display_en_confidence: str | None = None
@@ -324,7 +324,7 @@ class PlaceDetails:
             "review_count": self.review_count,
             "price_range": self.price_range,
             "admission_price": self.admission_price,
-            "lodging_price": self.lodging_price,
+            "room_price": self.room_price,
             "address": self.address,
             "address_display_en": self.address_display_en,
             "address_display_en_source": self.address_display_en_source,

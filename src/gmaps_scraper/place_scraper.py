@@ -653,7 +653,7 @@ _PLACE_JS_EXTRACTOR = r"""
       }
       return prices;
     };
-    const lodgingOverlayPrice = () => {
+    const roomOverlayPrice = () => {
       const selectors = [
         ".rlmNhf button[aria-label]",
         "button[aria-label*='per night' i]",
@@ -714,8 +714,8 @@ _PLACE_JS_EXTRACTOR = r"""
     plus_code: itemValue("oloc"),
     review_topics: collectReviewTopics(),
     admission_prices: collectLeafPrices(sectionRootByHeading("Admission")),
-    lodging_prices: collectLeafPrices(sectionRootByHeading("Compare prices")),
-    lodging_price_overlay: lodgingOverlayPrice(),
+    room_prices: collectLeafPrices(sectionRootByHeading("Compare prices")),
+    room_price_overlay: roomOverlayPrice(),
     dom_candidates: collectDomCandidates(),
     main_photo_url: mainPhotoUrl,
     photo_url: photoUrl,
@@ -1640,8 +1640,8 @@ def _build_place_details(
         price_range=_clean_price_range_text(snapshot.get("price_range"))
         or _extract_price_range_from_lines(combined_lines),
         admission_price=_summarize_offer_prices(snapshot.get("admission_prices")),
-        lodging_price=_summarize_offer_prices(snapshot.get("lodging_prices"))
-        or _clean_numeric_price_text(snapshot.get("lodging_price_overlay")),
+        room_price=_summarize_offer_prices(snapshot.get("room_prices"))
+        or _clean_numeric_price_text(snapshot.get("room_price_overlay")),
         # Structural DOM data is primary. Text-line fallback is a last resort
         # for preview/limited payloads and is intentionally conservative.
         address=address,
@@ -2117,7 +2117,7 @@ def _place_detail_values(details: PlaceDetails) -> dict[str, object]:
         "review_count": details.review_count,
         "price_range": details.price_range,
         "admission_price": details.admission_price,
-        "lodging_price": details.lodging_price,
+        "room_price": details.room_price,
         "address": details.address,
         "address_display_en": details.address_display_en,
         "address_display_en_source": details.address_display_en_source,

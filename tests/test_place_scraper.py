@@ -396,9 +396,9 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertIsNone(details.price_range)
         self.assertEqual(details.admission_price, "NT$101.00")
-        self.assertIsNone(details.lodging_price)
+        self.assertIsNone(details.room_price)
 
-    def test_build_place_details_summarizes_lodging_prices_separately(self) -> None:
+    def test_build_place_details_summarizes_room_prices_separately(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Tokyo+Prince+Hotel",
             resolved_url="https://www.google.com/maps/place/Tokyo+Prince+Hotel",
@@ -408,13 +408,13 @@ class PlaceScraperTests(unittest.TestCase):
                 "rating": "4.2",
                 "review_count": "5,481",
                 "address": "3 Chome-3-1 Shibakoen, Minato City, Tokyo 105-8560, Japan",
-                "lodging_prices": [
+                "room_prices": [
                     "NT$5,960",
                     "NT$6,473",
                     "NT$7,299",
                     "NT$7,355",
                 ],
-                "lodging_price_overlay": "NT$5,293",
+                "room_price_overlay": "NT$5,293",
                 "body_text": "\n".join(
                     [
                         "Compare prices",
@@ -429,7 +429,7 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertIsNone(details.price_range)
         self.assertIsNone(details.admission_price)
-        self.assertEqual(details.lodging_price, "NT$6,473")
+        self.assertEqual(details.room_price, "NT$6,473")
 
     def test_place_js_extractor_prefers_data_item_address_rows(self) -> None:
         self.assertIn('const legacy = itemValue("address");', _PLACE_JS_EXTRACTOR)
@@ -455,7 +455,7 @@ class PlaceScraperTests(unittest.TestCase):
             _PLACE_JS_EXTRACTOR,
         )
         self.assertIn(
-            'lodging_prices: collectLeafPrices(sectionRootByHeading("Compare prices"))',
+            'room_prices: collectLeafPrices(sectionRootByHeading("Compare prices"))',
             _PLACE_JS_EXTRACTOR,
         )
         self.assertIn('button[aria-label*=\'per night\' i]', _PLACE_JS_EXTRACTOR)
