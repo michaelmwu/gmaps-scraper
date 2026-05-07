@@ -371,6 +371,66 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(details.price_range, "$$")
 
+    def test_build_place_details_summarizes_admission_prices_separately(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Shinjuku+Gyoen",
+            resolved_url="https://www.google.com/maps/place/Shinjuku+Gyoen",
+            snapshot={
+                "name": "Shinjuku Gyoen National Garden",
+                "category": "National park",
+                "rating": "4.6",
+                "review_count": "12,340",
+                "address": "11 Naitomachi, Shinjuku City, Tokyo 160-0014, Japan",
+                "admission_prices": ["NT$100.40", "NT$101.00", "NT$101.00"],
+                "body_text": "\n".join(
+                    [
+                        "Admission",
+                        "Official site",
+                        "NT$100.40",
+                        "Klook",
+                        "NT$101.00",
+                    ]
+                ),
+            },
+        )
+
+        self.assertIsNone(details.price_range)
+        self.assertEqual(details.admission_price, "NT$101.00")
+        self.assertIsNone(details.lodging_price)
+
+    def test_build_place_details_summarizes_lodging_prices_separately(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Tokyo+Prince+Hotel",
+            resolved_url="https://www.google.com/maps/place/Tokyo+Prince+Hotel",
+            snapshot={
+                "name": "Tokyo Prince Hotel",
+                "category": "Hotel",
+                "rating": "4.2",
+                "review_count": "5,481",
+                "address": "3 Chome-3-1 Shibakoen, Minato City, Tokyo 105-8560, Japan",
+                "lodging_prices": [
+                    "NT$5,960",
+                    "NT$6,473",
+                    "NT$7,299",
+                    "NT$7,355",
+                ],
+                "lodging_price_overlay": "NT$5,293",
+                "body_text": "\n".join(
+                    [
+                        "Compare prices",
+                        "Agoda",
+                        "NT$5,960",
+                        "Priceline",
+                        "NT$5,293",
+                    ]
+                ),
+            },
+        )
+
+        self.assertIsNone(details.price_range)
+        self.assertIsNone(details.admission_price)
+        self.assertEqual(details.lodging_price, "NT$6,473")
+
     def test_place_js_extractor_prefers_data_item_address_rows(self) -> None:
         self.assertIn('const legacy = itemValue("address");', _PLACE_JS_EXTRACTOR)
         self.assertIn("if (legacy) {", _PLACE_JS_EXTRACTOR)
@@ -388,6 +448,17 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn("button[data-item-id^='phone:'] .Io6YTe", _PLACE_JS_EXTRACTOR)
         self.assertIn('plus_code: itemValue("oloc")', _PLACE_JS_EXTRACTOR)
         self.assertIn("a[data-item-id='authority']", _PLACE_JS_EXTRACTOR)
+
+    def test_place_js_extractor_collects_quote_sections_separately(self) -> None:
+        self.assertIn(
+            'admission_prices: collectLeafPrices(sectionRootByHeading("Admission"))',
+            _PLACE_JS_EXTRACTOR,
+        )
+        self.assertIn(
+            'lodging_prices: collectLeafPrices(sectionRootByHeading("Compare prices"))',
+            _PLACE_JS_EXTRACTOR,
+        )
+        self.assertIn('button[aria-label*=\'per night\' i]', _PLACE_JS_EXTRACTOR)
 
     def test_review_topic_collection_can_click_review_tab_and_read_chips(self) -> None:
         self.assertIn("button[role='tab']", _PLACE_REVIEW_TAB_CLICK_JS)
