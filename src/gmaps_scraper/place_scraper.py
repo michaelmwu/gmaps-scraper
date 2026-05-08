@@ -1840,7 +1840,7 @@ def _open_place_result_from_search_page(page: Any, *, timeout_ms: int) -> dict[s
     candidate = _search_result_candidate(page, timeout_ms=timeout_ms)
     if candidate is None:
         return None
-    target_url = candidate["href"]
+    target_url = cast(str, candidate["href"])
     if not _looks_like_google_maps_place_url(target_url):
         return None
     try:
@@ -1865,7 +1865,7 @@ def _open_place_result_from_search_page(page: Any, *, timeout_ms: int) -> dict[s
 
 def _search_result_candidate_url(page: Any, *, timeout_ms: int) -> str | None:
     candidate = _search_result_candidate(page, timeout_ms=timeout_ms)
-    return None if candidate is None else candidate["href"]
+    return None if candidate is None else cast(str, candidate["href"])
 
 
 def _search_result_candidate(page: Any, *, timeout_ms: int) -> dict[str, object] | None:
@@ -3213,7 +3213,11 @@ def _looks_like_description_address_text(value: str) -> bool:
     # Editorial summaries can legitimately mention floors or numbers. Keep
     # sentence-like prose unless it starts like a structured street address.
     word_count = len(value.split())
-    if word_count >= 8 and re.search(r"[.!?]$", value) and re.match(r"^\d|^No[.\s]", value, re.IGNORECASE) is None:
+    if (
+        word_count >= 8
+        and re.search(r"[.!?]$", value)
+        and re.match(r"^\d|^No[.\s]", value, re.IGNORECASE) is None
+    ):
         return False
 
     return _looks_like_address_line(value)
