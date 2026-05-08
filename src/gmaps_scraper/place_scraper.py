@@ -324,6 +324,11 @@ _PLACE_JS_EXTRACTOR = r"""
     `[data-item-id="${itemId}"] .Io6YTe`,
     `[data-item-id="${itemId}"]`,
   ]);
+  const descriptionValue = () => firstText([
+    ".WeS02d .PYvSYb",
+    ".WeS02d",
+    ".PYvSYb",
+  ]);
 
   const rowValue = (row) => {
     // `.DkEaL` can be a localized row label when the value is in `.Io6YTe`.
@@ -804,6 +809,7 @@ _PLACE_JS_EXTRACTOR = r"""
       ".skqShb .fontBodyMedium button",
       "button.DkEaL",
     ]),
+    description: descriptionValue(),
     price_range: priceRangeValue(),
     address: addressValue(),
     located_in: itemValue("locatedin"),

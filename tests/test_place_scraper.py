@@ -76,6 +76,8 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn('element.closest("[data-review-id]")', _PLACE_JS_EXTRACTOR)
         self.assertIn("root.querySelectorAll(selector)", _PLACE_JS_EXTRACTOR)
         self.assertIn(r"return /(^|\W)reviews?(\W|$)/i.test(label);", _PLACE_JS_EXTRACTOR)
+        self.assertIn('".WeS02d .PYvSYb"', _PLACE_JS_EXTRACTOR)
+        self.assertIn("description: descriptionValue(),", _PLACE_JS_EXTRACTOR)
 
     def test_collect_place_snapshot_can_skip_reviews_and_about_tabs(self) -> None:
         class _FakePage:
@@ -1569,6 +1571,38 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(details.name, "Open Kitchen")
         self.assertEqual(details.description, "Open fire cooking in a bright room.")
         self.assertIsNone(details.status)
+
+    def test_build_place_details_preserves_editorial_summary_description(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Faraglioni",
+            resolved_url="https://www.google.com/maps/place/Faraglioni",
+            snapshot={
+                "name": "Faraglioni",
+                "category": "Island",
+                "description": (
+                    "Offering a unique view, boats travel through an arch of these "
+                    "three iconic, oceanic rock formations."
+                ),
+                "body_text": "\n".join(
+                    [
+                        "Faraglioni",
+                        "Island",
+                        (
+                            "Offering a unique view, boats travel through an arch of "
+                            "these three iconic, oceanic rock formations."
+                        ),
+                    ]
+                ),
+            },
+        )
+
+        self.assertEqual(
+            details.description,
+            (
+                "Offering a unique view, boats travel through an arch of these "
+                "three iconic, oceanic rock formations."
+            ),
+        )
 
     def test_build_place_details_preserves_photo_url(self) -> None:
         details = _build_place_details(
