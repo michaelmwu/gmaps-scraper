@@ -76,6 +76,8 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIn('element.closest("[data-review-id]")', _PLACE_JS_EXTRACTOR)
         self.assertIn("root.querySelectorAll(selector)", _PLACE_JS_EXTRACTOR)
         self.assertIn(r"return /(^|\W)reviews?(\W|$)/i.test(label);", _PLACE_JS_EXTRACTOR)
+
+    def test_place_js_extractor_includes_editorial_summary_selectors(self) -> None:
         self.assertIn('".WeS02d .PYvSYb"', _PLACE_JS_EXTRACTOR)
         self.assertIn("description: descriptionValue(),", _PLACE_JS_EXTRACTOR)
 
