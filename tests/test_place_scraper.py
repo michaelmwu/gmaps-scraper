@@ -1249,6 +1249,82 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(description, "Open now for lunch and dinner service.")
 
+    def test_extract_preview_description_accepts_result_card_mini_summary(self) -> None:
+        description = _extract_preview_description(
+            [
+                "Taipei Zoo",
+                "Zoo",
+                "No. 30號, Section 2, Xinguang Rd",
+                "Sizable zoo with a gondola & kids' area",
+                "Open · Closes 5 PM",
+            ]
+        )
+
+        self.assertEqual(description, "Sizable zoo with a gondola & kids' area")
+
+    def test_merge_place_sources_preserves_full_description_over_preview_summary(self) -> None:
+        merged = _merge_place_sources(
+            {
+                "name": "Taipei Zoo",
+                "description": (
+                    "Large indoor-outdoor zoo in a scenic setting with a children's "
+                    "area, gondola & shuttle train."
+                ),
+            },
+            {
+                "description": "Sizable zoo with a gondola & kids' area",
+            },
+        )
+
+        self.assertEqual(
+            merged["description"],
+            (
+                "Large indoor-outdoor zoo in a scenic setting with a children's "
+                "area, gondola & shuttle train."
+            ),
+        )
+
+    def test_merge_place_sources_uses_preview_summary_when_full_description_missing(self) -> None:
+        merged = _merge_place_sources(
+            {
+                "name": "Taipei Zoo",
+                "description": None,
+            },
+            {
+                "description": "Sizable zoo with a gondola & kids' area",
+            },
+        )
+
+        self.assertEqual(merged["description"], "Sizable zoo with a gondola & kids' area")
+
+    def test_build_place_details_keeps_search_result_description_separate(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/search/?api=1&query=Taipei+Zoo",
+            resolved_url="https://www.google.com/maps/place/Taipei+Zoo",
+            snapshot={
+                "name": "Taipei Zoo",
+                "category": "Zoo",
+                "description": (
+                    "Large indoor-outdoor zoo in a scenic setting with a children's "
+                    "area, gondola & shuttle train."
+                ),
+                "search_result_description": "Sizable zoo with a gondola & kids' area",
+                "body_text": "Taipei Zoo\nZoo",
+            },
+        )
+
+        self.assertEqual(
+            details.description,
+            (
+                "Large indoor-outdoor zoo in a scenic setting with a children's "
+                "area, gondola & shuttle train."
+            ),
+        )
+        self.assertEqual(
+            details.search_result_description,
+            "Sizable zoo with a gondola & kids' area",
+        )
+
     def test_extract_preview_place_enrichment_rejects_invalid_address_parts(self) -> None:
         payload_data = [
             [
@@ -1606,6 +1682,38 @@ class PlaceScraperTests(unittest.TestCase):
             ),
         )
 
+    def test_build_place_details_preserves_editorial_summary_with_floor_number(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Taipei+101",
+            resolved_url="https://www.google.com/maps/place/Taipei+101",
+            snapshot={
+                "name": "Taipei 101",
+                "category": "Shopping mall",
+                "description": (
+                    "Towering landmark skyscraper offering shops, eateries & an "
+                    "observation platform on the 89th floor."
+                ),
+                "body_text": "\n".join(
+                    [
+                        "Taipei 101",
+                        "Shopping mall",
+                        (
+                            "Towering landmark skyscraper offering shops, eateries & an "
+                            "observation platform on the 89th floor."
+                        ),
+                    ]
+                ),
+            },
+        )
+
+        self.assertEqual(
+            details.description,
+            (
+                "Towering landmark skyscraper offering shops, eateries & an "
+                "observation platform on the 89th floor."
+            ),
+        )
+
     def test_build_place_details_preserves_photo_url(self) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Open+Kitchen",
@@ -1816,6 +1924,40 @@ class PlaceScraperTests(unittest.TestCase):
             [("https://www.google.com/maps/place/National+Azabu", "domcontentloaded", 30_000)],
         )
         self.assertIn(("load_state", "load", 10_000), page.waited)
+
+    def test_open_place_result_from_search_page_returns_result_card_description(self) -> None:
+        class _FakePage:
+            def __init__(self) -> None:
+                self.visited: list[tuple[str, str, int]] = []
+
+            def evaluate(self, script: object) -> object:
+                if script == _PLACE_SEARCH_RESULT_CLICK_JS:
+                    return {
+                        "href": "https://www.google.com/maps/place/Taipei+Zoo",
+                        "search_result_description": "Sizable zoo with a gondola & kids' area",
+                    }
+                return None
+
+            def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+                self.visited.append((url, wait_until, timeout))
+
+            def wait_for_load_state(self, _state: str, *, timeout: int) -> None:
+                pass
+
+            def wait_for_selector(self, _selector: str, *, timeout: int, state: str) -> None:
+                pass
+
+        page = _FakePage()
+        with patch("gmaps_scraper.place_scraper._handle_google_consent"):
+            snapshot = _open_place_result_from_search_page(page, timeout_ms=30_000)
+
+        self.assertEqual(
+            snapshot,
+            {
+                "opened_from_search_result": True,
+                "search_result_description": "Sizable zoo with a gondola & kids' area",
+            },
+        )
 
     def test_open_place_result_from_search_page_rejects_non_google_place_urls(self) -> None:
         class _FakePage:
