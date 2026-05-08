@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, cast
-from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from gmaps_scraper.models import (
     PLACE_LLM_DISPLAY_TRANSLATION_FIELDS,
@@ -1968,9 +1968,8 @@ def _collect_place_snapshot_with_context(
     page = None
     try:
         page = context.new_page()
-        localized_place_url = _with_google_maps_locale(place_url)
-        _seed_google_consent_cookies(page, source_url=localized_place_url)
-        page.goto(localized_place_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        _seed_google_consent_cookies(page, source_url=place_url)
+        page.goto(place_url, wait_until="domcontentloaded", timeout=timeout_ms)
         _handle_google_consent(page, timeout_ms=timeout_ms)
         try:
             page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
@@ -2103,7 +2102,6 @@ def _open_place_result_from_search_page(
         return None
     if not _looks_like_google_maps_place_url(target_url):
         return None
-    target_url = _with_google_maps_locale(target_url)
     clicked = _click_search_result_candidate(page, target_url, timeout_ms=timeout_ms)
     if not clicked or not _wait_for_place_detail_title(page, timeout_ms=min(timeout_ms, 12_000)):
         try:
@@ -2115,6 +2113,7 @@ def _open_place_result_from_search_page(
             page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
         except Exception:
             pass
+        _handle_google_consent(page, timeout_ms=timeout_ms)
     if not _wait_for_place_detail_title(page, timeout_ms=min(timeout_ms, 12_000)):
         return None
     return _search_result_snapshot(candidate)
@@ -2145,6 +2144,7 @@ def _click_search_result_candidate(page: Any, target_url: str, *, timeout_ms: in
         page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
     except Exception:
         pass
+    _handle_google_consent(page, timeout_ms=timeout_ms)
     return True
 
 
@@ -2219,23 +2219,6 @@ def _looks_like_google_maps_place_url(value: str) -> bool:
     if re.fullmatch(r"(?:www\.|maps\.)?google\.[a-z]{2,}(?:\.[a-z]{2,})?", host) is None:
         return False
     return parsed.path.startswith("/maps/place/")
-
-
-def _with_google_maps_locale(value: str, *, hl: str = "en", gl: str = "us") -> str:
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
-    if re.fullmatch(r"(?:www\.|maps\.)?google\.[a-z]{2,}(?:\.[a-z]{2,})?", host) is None:
-        return value
-    query_pairs = [
-        (key, existing_value)
-        for key, existing_value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key not in {"hl", "gl"}
-    ]
-    if hl.strip():
-        query_pairs.append(("hl", hl.strip()))
-    if gl.strip():
-        query_pairs.append(("gl", gl.strip()))
-    return urlunparse(parsed._replace(query=urlencode(query_pairs)))
 
 
 def _collect_review_panel_snapshot(page: Any, *, timeout_ms: int) -> dict[str, object]:

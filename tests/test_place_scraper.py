@@ -52,7 +52,6 @@ from gmaps_scraper.place_scraper import (
     _search_result_candidate_url,
     _seed_google_consent_cookies,
     _should_use_llm_repair,
-    _with_google_maps_locale,
     collect_place_snapshot,
     scrape_places,
 )
@@ -1808,9 +1807,11 @@ class PlaceScraperTests(unittest.TestCase):
 
             def evaluate(self, script: object, *args: object) -> object:
                 if script == _PLACE_SEARCH_RESULT_CLICK_JS:
-                    return "https://www.google.com/maps/place/National+Azabu"
+                    return "https://www.google.co.jp/maps/place/National+Azabu?hl=ja&gl=jp"
                 if script == _PLACE_SEARCH_RESULT_OPEN_JS:
-                    assert args[0] == "https://www.google.com/maps/place/National+Azabu?hl=en&gl=us"
+                    assert args[0] == (
+                        "https://www.google.co.jp/maps/place/National+Azabu?hl=ja&gl=jp"
+                    )
                     return {"x": 20, "y": 40}
                 if script == _PLACE_DETAIL_READY_JS:
                     self.detail_checks += 1
@@ -1833,12 +1834,13 @@ class PlaceScraperTests(unittest.TestCase):
                 self.waited.append(("timeout", value))
 
         page = _FakePage()
-        with patch("gmaps_scraper.place_scraper._handle_google_consent"):
+        with patch("gmaps_scraper.place_scraper._handle_google_consent") as consent_mock:
             self.assertEqual(_open_place_result_from_search_page(page, timeout_ms=30_000), {})
         self.assertEqual(page.visited, [])
         self.assertEqual(page.clicked, [(20, 40)])
         self.assertEqual(page.detail_checks, 2)
         self.assertIn(("load_state", "load", 10_000), page.waited)
+        self.assertEqual(consent_mock.call_count, 2)
 
     def test_open_place_result_from_search_page_falls_back_to_goto_when_click_fails(
         self,
@@ -1850,7 +1852,7 @@ class PlaceScraperTests(unittest.TestCase):
 
             def evaluate(self, script: object, *_args: object) -> object:
                 if script == _PLACE_SEARCH_RESULT_CLICK_JS:
-                    return "https://www.google.com/maps/place/National+Azabu"
+                    return "https://www.google.co.jp/maps/place/National+Azabu?hl=ja&gl=jp"
                 if script == _PLACE_SEARCH_RESULT_OPEN_JS:
                     return {}
                 if script == _PLACE_DETAIL_READY_JS:
@@ -1869,27 +1871,20 @@ class PlaceScraperTests(unittest.TestCase):
                 assert state == "attached"
 
         page = _FakePage()
-        with patch("gmaps_scraper.place_scraper._handle_google_consent"):
+        with patch("gmaps_scraper.place_scraper._handle_google_consent") as consent_mock:
             self.assertEqual(_open_place_result_from_search_page(page, timeout_ms=30_000), {})
         self.assertEqual(
             page.visited,
             [
                 (
-                    "https://www.google.com/maps/place/National+Azabu?hl=en&gl=us",
+                    "https://www.google.co.jp/maps/place/National+Azabu?hl=ja&gl=jp",
                     "domcontentloaded",
                     30_000,
                 )
             ],
         )
         self.assertEqual(page.detail_checks, 1)
-
-    def test_with_google_maps_locale_replaces_existing_locale(self) -> None:
-        self.assertEqual(
-            _with_google_maps_locale(
-                "https://www.google.co.jp/maps/place/Tokyo+Tower?entry=ttu&hl=ja&gl=jp"
-            ),
-            "https://www.google.co.jp/maps/place/Tokyo+Tower?entry=ttu&hl=en&gl=us",
-        )
+        self.assertEqual(consent_mock.call_count, 2)
 
     def test_open_place_result_from_search_page_rejects_non_google_place_urls(self) -> None:
         class _FakePage:
