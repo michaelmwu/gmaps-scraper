@@ -1493,6 +1493,58 @@ class PlaceScraperTests(unittest.TestCase):
                 "feel like it is a must visit spot."
             )
         )
+        self.assertIsNone(
+            _clean_description_text(
+                "Best ramen we've ever had. It helps that you get to make it yourself "
+                "(the noodles at least). Everything tastes better when you do it yourself! "
+                "Date day for a Saturday morning class. Great experience overall."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "That’s gotta be one of the best hot chocolate drink I’ve tasted in my life! "
+                "The long wait was definitely worth it. There was quite a line before we got "
+                "a seat, but boy was it worth every minute. Definitely recommend this place."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "It was my first attempt to eat mukhata. I ordered beef combo which was "
+                "quite a lot with full of veggie for 1 person. Very good taste."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "Best place to stay in Hanoi. I’d just finished a north to south Vietnam "
+                "cycle and had stayed in everything from dorms to old Soviet-era hotels."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "The katsu burger!!! Omfg!!! So yummy. My bf got the shrimp burger but I "
+                "preferred the pork. We loved the sauce."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "What a great hotel! The rooms were huge and clean. All the staff were very "
+                "friendly, helpful and sweet."
+            )
+        )
+        self.assertIsNone(
+            _clean_description_text(
+                "Had a great time here with my friends! The barkeeper made us feel welcomed "
+                "and we had a lot of fun."
+            )
+        )
+        for review_description in (
+            "The lady was just so so lovely. My feet are just gorgeous. Would recommend to everyone.",
+            "My stay in Alila was wonderful. Special shout out to the staff for making it memorable.",
+            "The hotel have a sense of peace and tranquility once step in. The personal service was delicate.",
+            "The staffs also offered great recommendation for drinks based on your preference.",
+            "Directions Save Nearby Send to phone Share About this data Get the most out of Google Maps Sign in",
+        ):
+            self.assertIsNone(_clean_description_text(review_description))
 
     def test_clean_description_text_keeps_first_person_business_summary(self) -> None:
         self.assertEqual(
