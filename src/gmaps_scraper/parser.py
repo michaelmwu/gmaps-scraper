@@ -644,6 +644,8 @@ def _find_cid_in_value(value: JSONValue | None) -> str | None:
         return _normalize_cid_token(value)
     if not isinstance(value, list):
         return None
+    if _parse_list_owner(value) is not None:
+        return None
 
     numeric_texts = [
         text
